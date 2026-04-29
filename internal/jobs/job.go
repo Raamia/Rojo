@@ -19,6 +19,6 @@ func (j *Job) Transition(next JobStatus) error {
 		return fmt.Errorf("illegal transition for job %s: %s -> %s", j.ID, j.Status, next)
 	}
 	j.Status = next
-	j.UpdatedAt = time.Now()
+	j.UpdatedAt = time.Now().UTC()
 	return nil
 }
