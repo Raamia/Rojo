@@ -29,6 +29,14 @@ func main() {
 		Addr:              ":8080",
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+		// Bound how long a client may take to send a request and how long an
+		// idle keep-alive connection may sit. Without these a slowloris client
+		// dribbling one byte at a time holds a connection open indefinitely.
+		ReadTimeout: 30 * time.Second,
+		IdleTimeout: 120 * time.Second,
+		// WriteTimeout is deliberately left unset: /stream is a long-lived
+		// WebSocket and a server-wide write deadline would sever it. The
+		// stream handler applies its own per-write deadline instead.
 	}
 
 	logger.Info("api listening", "addr", srv.Addr)

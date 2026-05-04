@@ -19,9 +19,23 @@ func NewJobsHandler(repo jobs.JobRepository) *JobsHandler {
 	return &JobsHandler{Repo: repo}
 }
 
+// MaxRequestBodyBytes bounds a job submission. The largest legal request is a
+// 4000-character task plus a path, so 64 KiB is generous. Without this the
+// decoder buffers the whole body into memory before validation can reject it,
+// so any unauthenticated client could pin arbitrary heap by streaming a large
+// body — measured at 16 MiB accepted, and 50 MiB read in full.
+const MaxRequestBodyBytes = 64 << 10
+
 func (h *JobsHandler) Create(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, MaxRequestBodyBytes)
+
 	var req jobs.NewJobRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			WriteJSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		WriteJSONError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
