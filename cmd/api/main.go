@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"os"
@@ -8,6 +9,9 @@ import (
 
 	"github.com/Raamia/Rojo/internal/api"
 	"github.com/Raamia/Rojo/internal/jobs"
+	"github.com/Raamia/Rojo/internal/orchestration"
+	"github.com/Raamia/Rojo/internal/queue"
+	"github.com/Raamia/Rojo/internal/worker"
 )
 
 func main() {
@@ -15,7 +19,13 @@ func main() {
 	slog.SetDefault(logger)
 
 	repo := jobs.NewInMemoryRepository()
-	handler := api.NewJobsHandler(repo)
+	q := queue.New(64)
+	processor := orchestration.NewProcessor(repo)
+	pool := worker.NewPool(4, q, processor)
+	handler := api.NewJobsHandler(repo, q)
+
+	ctx := context.Background()
+	pool.Start(ctx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {

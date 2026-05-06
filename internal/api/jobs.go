@@ -11,12 +11,17 @@ import (
 	"github.com/Raamia/Rojo/internal/jobs"
 )
 
-type JobsHandler struct {
-	Repo jobs.JobRepository
+type Enqueuer interface {
+	Enqueue(jobID string) error
 }
 
-func NewJobsHandler(repo jobs.JobRepository) *JobsHandler {
-	return &JobsHandler{Repo: repo}
+type JobsHandler struct {
+	Repo  jobs.JobRepository
+	Queue Enqueuer
+}
+
+func NewJobsHandler(repo jobs.JobRepository, q Enqueuer) *JobsHandler {
+	return &JobsHandler{Repo: repo, Queue: q}
 }
 
 // MaxRequestBodyBytes bounds a job submission. The largest legal request is a
@@ -56,6 +61,12 @@ func (h *JobsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if err := h.Repo.Create(r.Context(), job); err != nil {
 		WriteJSONError(w, http.StatusInternalServerError, "failed to create job")
 		return
+	}
+	if h.Queue != nil {
+		if err := h.Queue.Enqueue(job.ID); err != nil {
+			WriteJSONError(w, http.StatusServiceUnavailable, "queue full, try again later")
+			return
+		}
 	}
 	WriteJSON(w, http.StatusCreated, job)
 }
