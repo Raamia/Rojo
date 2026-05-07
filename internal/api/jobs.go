@@ -64,6 +64,16 @@ func (h *JobsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.Queue != nil {
 		if err := h.Queue.Enqueue(job.ID); err != nil {
+			// The job is already persisted, but nothing will ever pick it up.
+			// Move it to the terminal `failed` status so it does not linger as
+			// a phantom `queued` job that looks pending forever; a rejected
+			// submission must not leave work that no worker will claim.
+			if txErr := job.Transition(jobs.StatusFailed); txErr == nil {
+				if updErr := h.Repo.Update(r.Context(), job); updErr != nil {
+					LoggerFrom(r.Context()).Error("mark unqueueable job failed",
+						"job_id", job.ID, "err", updErr)
+				}
+			}
 			WriteJSONError(w, http.StatusServiceUnavailable, "queue full, try again later")
 			return
 		}
