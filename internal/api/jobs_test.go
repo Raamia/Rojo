@@ -15,9 +15,13 @@ type noopQueue struct{}
 
 func (noopQueue) Enqueue(string) error { return nil }
 
+type noopCanceller struct{}
+
+func (noopCanceller) Cancel(string) error { return nil }
+
 func newTestHandler() (*JobsHandler, *jobs.InMemoryRepository) {
 	repo := jobs.NewInMemoryRepository()
-	return NewJobsHandler(repo, noopQueue{}), repo
+	return NewJobsHandler(repo, noopQueue{}, noopCanceller{}), repo
 }
 
 func TestCreateJob_Success(t *testing.T) {

@@ -23,9 +23,10 @@ func main() {
 
 	repo := jobs.NewInMemoryRepository()
 	q := queue.New(64)
-	processor := orchestration.NewProcessor(repo)
+	canceller := orchestration.NewCanceller()
+	processor := orchestration.NewProcessor(repo, canceller)
 	pool := worker.NewPool(4, q, processor)
-	handler := api.NewJobsHandler(repo, q)
+	handler := api.NewJobsHandler(repo, q, canceller)
 
 	workerCtx, cancelWorkers := context.WithCancel(context.Background())
 	pool.Start(workerCtx)
@@ -37,6 +38,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/jobs", handler.Create)
 	mux.HandleFunc("GET /api/v1/jobs", handler.List)
 	mux.HandleFunc("GET /api/v1/jobs/{jobID}", handler.Get)
+	mux.HandleFunc("POST /api/v1/jobs/{jobID}/cancel", handler.Cancel)
 
 	srv := &http.Server{
 		Addr:              ":8080",

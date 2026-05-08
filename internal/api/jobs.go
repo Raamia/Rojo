@@ -15,13 +15,18 @@ type Enqueuer interface {
 	Enqueue(jobID string) error
 }
 
-type JobsHandler struct {
-	Repo  jobs.JobRepository
-	Queue Enqueuer
+type Canceller interface {
+	Cancel(jobID string) error
 }
 
-func NewJobsHandler(repo jobs.JobRepository, q Enqueuer) *JobsHandler {
-	return &JobsHandler{Repo: repo, Queue: q}
+type JobsHandler struct {
+	Repo      jobs.JobRepository
+	Queue     Enqueuer
+	Canceller Canceller
+}
+
+func NewJobsHandler(repo jobs.JobRepository, q Enqueuer, c Canceller) *JobsHandler {
+	return &JobsHandler{Repo: repo, Queue: q, Canceller: c}
 }
 
 // MaxRequestBodyBytes bounds a job submission. The largest legal request is a
@@ -93,6 +98,27 @@ func (h *JobsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteJSON(w, http.StatusOK, job)
+}
+
+func (h *JobsHandler) Cancel(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("jobID")
+	if _, err := h.Repo.Get(r.Context(), id); err != nil {
+		if errors.Is(err, jobs.ErrJobNotFound) {
+			WriteJSONError(w, http.StatusNotFound, "job not found")
+			return
+		}
+		WriteJSONError(w, http.StatusInternalServerError, "failed to load job")
+		return
+	}
+	if h.Canceller == nil {
+		WriteJSONError(w, http.StatusServiceUnavailable, "cancellation not available")
+		return
+	}
+	if err := h.Canceller.Cancel(id); err != nil {
+		WriteJSONError(w, http.StatusConflict, err.Error())
+		return
+	}
+	WriteJSON(w, http.StatusAccepted, map[string]string{"job_id": id, "status": "cancel_requested"})
 }
 
 func (h *JobsHandler) List(w http.ResponseWriter, r *http.Request) {
