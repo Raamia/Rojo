@@ -33,13 +33,14 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 		return fmt.Errorf("load job %s: %w", jobID, err)
 	}
 
+	// Work steps up to (but not including) the terminal completion. Each is
+	// followed by a cancellation checkpoint.
 	steps := []jobs.JobStatus{
 		jobs.StatusPlanning,
 		jobs.StatusPreparingWorkspace,
 		jobs.StatusImplementing,
 		jobs.StatusVerifying,
 		jobs.StatusReviewing,
-		jobs.StatusCompleted,
 	}
 
 	for _, next := range steps {
@@ -59,6 +60,21 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+
+	// Terminal transition. Check cancellation one last time *before* committing
+	// completion — never after, because `completed` is terminal and a
+	// subsequent markCancelled would attempt an illegal completed->cancelled
+	// transition and return a misleading error for a job that actually finished.
+	if err := jobCtx.Err(); err != nil {
+		return p.markCancelled(job)
+	}
+	if err := job.Transition(jobs.StatusCompleted); err != nil {
+		return fmt.Errorf("transition to %s: %w", jobs.StatusCompleted, err)
+	}
+	if err := p.Repo.Update(jobCtx, job); err != nil {
+		return fmt.Errorf("persist status %s: %w", jobs.StatusCompleted, err)
+	}
+	log.Info("step complete", "status", jobs.StatusCompleted)
 	return nil
 }
 
