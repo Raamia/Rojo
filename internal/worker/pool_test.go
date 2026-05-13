@@ -35,10 +35,13 @@ func TestPool_ProcessesEnqueuedJobs(t *testing.T) {
 	defer cancel()
 	pool.Start(ctx)
 
+	// The queue is non-blocking (Enqueue returns ErrQueueFull rather than
+	// blocking), and n exceeds the buffer, so retry until each job lands as
+	// workers drain — same pattern as TestPool_ConcurrentEnqueueAndProcess.
 	const n = 20
 	for i := 0; i < n; i++ {
-		if err := q.Enqueue(fmt.Sprintf("job-%d", i)); err != nil {
-			t.Fatalf("enqueue: %v", err)
+		for q.Enqueue(fmt.Sprintf("job-%d", i)) != nil {
+			time.Sleep(time.Millisecond)
 		}
 	}
 
