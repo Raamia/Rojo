@@ -51,6 +51,15 @@ func (s *SafeRunner) Run(ctx context.Context, workingDir string, command string,
 	defer cancel()
 
 	result, err := s.inner.Run(runCtx, workingDir, command, args...)
+
+	// The caller's context taking priority: if it was cancelled (or its own
+	// deadline expired) the inner runner may have swallowed the killed-process
+	// error, so surface the cancellation explicitly rather than reporting success.
+	if ctx.Err() != nil {
+		return result, ctx.Err()
+	}
+
+	// Otherwise, an expired runCtx means our own timeout fired.
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		result.TimedOut = true
 		return result, ErrTimeout
