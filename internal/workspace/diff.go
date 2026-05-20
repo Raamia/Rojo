@@ -32,10 +32,16 @@ func (m *GitWorkspaceManager) ListOrphans(ctx context.Context, repoPath string) 
 		return nil, fmt.Errorf("git worktree list: %w", err)
 	}
 
+	// git reports worktree paths in canonical (symlink-resolved) form, e.g.
+	// /private/tmp/... where the configured baseDir is /tmp/... . Canonicalize
+	// both sides before comparing, otherwise a legitimately-tracked worktree is
+	// misclassified as an orphan whenever baseDir contains a symlink component
+	// (the default /tmp/rojo-worktrees on macOS, where /tmp -> /private/tmp).
 	tracked := make(map[string]struct{})
 	for _, line := range strings.Split(res.Stdout, "\n") {
 		if strings.HasPrefix(line, "worktree ") {
-			tracked[strings.TrimPrefix(line, "worktree ")] = struct{}{}
+			p := strings.TrimPrefix(line, "worktree ")
+			tracked[realPath(p)] = struct{}{}
 		}
 	}
 
@@ -53,9 +59,21 @@ func (m *GitWorkspaceManager) ListOrphans(ctx context.Context, repoPath string) 
 			continue
 		}
 		path := filepath.Join(m.baseDir, entry.Name())
-		if _, ok := tracked[path]; !ok {
+		if _, ok := tracked[realPath(path)]; !ok {
+			// Return the path under the configured baseDir (not the resolved
+			// form) so callers clean up using the path they know.
 			orphans = append(orphans, path)
 		}
 	}
 	return orphans, nil
+}
+
+// realPath resolves symlinks so paths from different sources (git's output vs.
+// a baseDir join) can be compared. Falls back to the input if resolution fails
+// (e.g. the path no longer exists).
+func realPath(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return p
 }
