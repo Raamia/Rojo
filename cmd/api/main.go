@@ -14,6 +14,7 @@ import (
 	"github.com/Raamia/Rojo/internal/jobs"
 	"github.com/Raamia/Rojo/internal/orchestration"
 	"github.com/Raamia/Rojo/internal/queue"
+	"github.com/Raamia/Rojo/internal/storage/postgres"
 	"github.com/Raamia/Rojo/internal/worker"
 )
 
@@ -21,7 +22,13 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	repo := jobs.NewInMemoryRepository()
+	repo, closeRepo, err := buildRepository(logger)
+	if err != nil {
+		logger.Error("build repository", "err", err)
+		os.Exit(1)
+	}
+	defer closeRepo()
+
 	q := queue.New(64)
 	canceller := orchestration.NewCanceller()
 	processor := orchestration.NewProcessor(repo, canceller)
@@ -84,4 +91,21 @@ func main() {
 	pool.Wait()
 
 	logger.Info("shutdown complete")
+}
+
+func buildRepository(logger *slog.Logger) (jobs.JobRepository, func(), error) {
+	dbURL := os.Getenv("ROJO_DB_URL")
+	if dbURL == "" {
+		logger.Warn("ROJO_DB_URL not set, using in-memory repository")
+		return jobs.NewInMemoryRepository(), func() {}, nil
+	}
+	pool, err := postgres.NewPool(context.Background(), postgres.Config{
+		URL:      dbURL,
+		MaxConns: 8,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	logger.Info("connected to postgres")
+	return postgres.NewJobRepository(pool), func() { pool.Close() }, nil
 }
