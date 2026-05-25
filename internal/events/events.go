@@ -55,21 +55,30 @@ func (b *InProcessBus) Publish(_ context.Context, e Event) error {
 	if e.CreatedAt.IsZero() {
 		e.CreatedAt = time.Now().UTC()
 	}
+	// Fan out while still holding the lock. Unsubscribe closes sub.C, so
+	// snapshotting the subscribers and sending after releasing the lock races
+	// any concurrent disconnect and panics with "send on closed channel" —
+	// and the publisher is usually the worker goroutine, which has no
+	// recover(), so an ordinary client disconnect would take down the process.
+	// Every send here is non-blocking, so the critical section stays bounded
+	// and a slow subscriber still cannot stall the publisher.
 	b.mu.Lock()
-	targets := make([]*Subscription, 0, len(b.subs[e.JobID]))
-	for sub := range b.subs[e.JobID] {
-		targets = append(targets, sub)
-	}
 	cb := b.dropCB
-	b.mu.Unlock()
-
-	for _, sub := range targets {
+	drops := 0
+	for sub := range b.subs[e.JobID] {
 		select {
 		case sub.C <- e:
 		default:
-			if cb != nil {
-				cb(e.JobID)
-			}
+			drops++
+		}
+	}
+	b.mu.Unlock()
+
+	// Notify outside the lock: the callback is caller-supplied and must not be
+	// able to deadlock the bus by re-entering it.
+	if cb != nil {
+		for i := 0; i < drops; i++ {
+			cb(e.JobID)
 		}
 	}
 	return nil
