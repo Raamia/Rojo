@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/Raamia/Rojo/internal/events"
 	"github.com/Raamia/Rojo/internal/jobs"
 )
 
@@ -46,7 +47,7 @@ func TestProcessor_CancelAtCompletionIsNotAnError(t *testing.T) {
 		t.Fatalf("create job: %v", err)
 	}
 
-	p := NewProcessor(repo, canc)
+	p := NewProcessor(repo, canc, events.NewInProcessBus())
 	if err := p.Process(ctx, jobID); err != nil {
 		t.Fatalf("Process returned %v, want nil for a job that reached completion", err)
 	}

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Raamia/Rojo/internal/events"
 	"github.com/Raamia/Rojo/internal/jobs"
 )
 
@@ -23,10 +24,11 @@ type JobsHandler struct {
 	Repo      jobs.JobRepository
 	Queue     Enqueuer
 	Canceller Canceller
+	Publisher events.Bus
 }
 
-func NewJobsHandler(repo jobs.JobRepository, q Enqueuer, c Canceller) *JobsHandler {
-	return &JobsHandler{Repo: repo, Queue: q, Canceller: c}
+func NewJobsHandler(repo jobs.JobRepository, q Enqueuer, c Canceller, pub events.Bus) *JobsHandler {
+	return &JobsHandler{Repo: repo, Queue: q, Canceller: c, Publisher: pub}
 }
 
 // MaxRequestBodyBytes bounds a job submission. The largest legal request is a
@@ -82,6 +84,12 @@ func (h *JobsHandler) Create(w http.ResponseWriter, r *http.Request) {
 			WriteJSONError(w, http.StatusServiceUnavailable, "queue full, try again later")
 			return
 		}
+	}
+	if h.Publisher != nil {
+		_ = h.Publisher.Publish(r.Context(), events.Event{
+			JobID: job.ID,
+			Type:  events.TypeJobCreated,
+		})
 	}
 	WriteJSON(w, http.StatusCreated, job)
 }

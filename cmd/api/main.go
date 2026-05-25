@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Raamia/Rojo/internal/api"
+	"github.com/Raamia/Rojo/internal/events"
 	"github.com/Raamia/Rojo/internal/jobs"
 	"github.com/Raamia/Rojo/internal/orchestration"
 	"github.com/Raamia/Rojo/internal/queue"
@@ -31,9 +32,10 @@ func main() {
 
 	q := queue.New(64)
 	canceller := orchestration.NewCanceller()
-	processor := orchestration.NewProcessor(repo, canceller)
+	bus := events.NewInProcessBus()
+	processor := orchestration.NewProcessor(repo, canceller, bus)
 	pool := worker.NewPool(4, q, processor)
-	handler := api.NewJobsHandler(repo, q, canceller)
+	handler := api.NewJobsHandler(repo, q, canceller, bus)
 
 	workerCtx, cancelWorkers := context.WithCancel(context.Background())
 	pool.Start(workerCtx)

@@ -21,7 +21,7 @@ func (noopCanceller) Cancel(string) error { return nil }
 
 func newTestHandler() (*JobsHandler, *jobs.InMemoryRepository) {
 	repo := jobs.NewInMemoryRepository()
-	return NewJobsHandler(repo, noopQueue{}, noopCanceller{}), repo
+	return NewJobsHandler(repo, noopQueue{}, noopCanceller{}, nil), repo
 }
 
 func TestCreateJob_Success(t *testing.T) {
