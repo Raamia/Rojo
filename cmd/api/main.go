@@ -49,6 +49,9 @@ func main() {
 	mux.HandleFunc("GET /api/v1/jobs/{jobID}", handler.Get)
 	mux.HandleFunc("POST /api/v1/jobs/{jobID}/cancel", handler.Cancel)
 
+	stream := api.NewStreamHandler(bus)
+	mux.HandleFunc("GET /api/v1/jobs/{jobID}/stream", stream.Stream)
+
 	srv := &http.Server{
 		Addr:              ":8080",
 		Handler:           mux,
