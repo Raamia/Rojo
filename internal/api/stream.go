@@ -44,7 +44,14 @@ func (h *StreamHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	sub := h.Bus.Subscribe(jobID, subscriberBuffer)
 	defer h.Bus.Unsubscribe(sub)
 
-	ctx := r.Context()
+	// This handler only ever writes, but a WebSocket peer's close/ping frames
+	// still have to be read for the connection to notice the peer is gone.
+	// CloseRead runs that read loop and cancels the returned context when the
+	// client disconnects. Without it a vanished client (closed tab, dropped
+	// network) leaves this goroutine parked on the select below forever —
+	// holding its subscription — because r.Context() is not cancelled for a
+	// hijacked connection and no further events arrive for a finished job.
+	ctx := conn.CloseRead(r.Context())
 	for {
 		select {
 		case <-ctx.Done():
