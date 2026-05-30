@@ -23,7 +23,7 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	repo, closeRepo, err := buildRepository(logger)
+	repo, store, closeRepo, err := buildRepository(logger)
 	if err != nil {
 		logger.Error("build repository", "err", err)
 		os.Exit(1)
@@ -32,7 +32,10 @@ func main() {
 
 	q := queue.New(64)
 	canceller := orchestration.NewCanceller()
-	bus := events.NewInProcessBus()
+	var bus events.Bus = events.NewInProcessBus()
+	if store != nil {
+		bus = events.NewPersistingBus(bus, store)
+	}
 	processor := orchestration.NewProcessor(repo, canceller, bus)
 	pool := worker.NewPool(4, q, processor)
 	handler := api.NewJobsHandler(repo, q, canceller, bus)
@@ -51,6 +54,11 @@ func main() {
 
 	stream := api.NewStreamHandler(bus)
 	mux.HandleFunc("GET /api/v1/jobs/{jobID}/stream", stream.Stream)
+
+	if store != nil {
+		history := api.NewEventsHandler(store)
+		mux.HandleFunc("GET /api/v1/jobs/{jobID}/events", history.History)
+	}
 
 	srv := &http.Server{
 		Addr:              ":8080",
@@ -98,19 +106,19 @@ func main() {
 	logger.Info("shutdown complete")
 }
 
-func buildRepository(logger *slog.Logger) (jobs.JobRepository, func(), error) {
+func buildRepository(logger *slog.Logger) (jobs.JobRepository, events.Store, func(), error) {
 	dbURL := os.Getenv("ROJO_DB_URL")
 	if dbURL == "" {
 		logger.Warn("ROJO_DB_URL not set, using in-memory repository")
-		return jobs.NewInMemoryRepository(), func() {}, nil
+		return jobs.NewInMemoryRepository(), nil, func() {}, nil
 	}
 	pool, err := postgres.NewPool(context.Background(), postgres.Config{
 		URL:      dbURL,
 		MaxConns: 8,
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	logger.Info("connected to postgres")
-	return postgres.NewJobRepository(pool), func() { pool.Close() }, nil
+	return postgres.NewJobRepository(pool), events.NewPostgresStore(pool), func() { pool.Close() }, nil
 }
