@@ -62,7 +62,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              ":8080",
-		Handler:           mux,
+		Handler:           api.LoggerMiddleware(logger)(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		// Bound how long a client may take to send a request and how long an
 		// idle keep-alive connection may sit. Without these a slowloris client
