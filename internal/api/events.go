@@ -22,6 +22,7 @@ func (h *EventsHandler) History(w http.ResponseWriter, r *http.Request) {
 	jobID := r.PathValue("jobID")
 	history, err := h.Store.History(r.Context(), jobID)
 	if err != nil {
+		LoggerFrom(r.Context()).Error("load event history", "job_id", jobID, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "failed to load events")
 		return
 	}

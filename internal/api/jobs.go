@@ -66,6 +66,7 @@ func (h *JobsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt: now,
 	}
 	if err := h.Repo.Create(r.Context(), job); err != nil {
+		LoggerFrom(r.Context()).Error("create job", "job_id", job.ID, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "failed to create job")
 		return
 	}
@@ -102,6 +103,7 @@ func (h *JobsHandler) Get(w http.ResponseWriter, r *http.Request) {
 			WriteJSONError(w, http.StatusNotFound, "job not found")
 			return
 		}
+		LoggerFrom(r.Context()).Error("load job", "job_id", id, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "failed to load job")
 		return
 	}
@@ -115,6 +117,7 @@ func (h *JobsHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 			WriteJSONError(w, http.StatusNotFound, "job not found")
 			return
 		}
+		LoggerFrom(r.Context()).Error("load job for cancel", "job_id", id, "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "failed to load job")
 		return
 	}
@@ -132,6 +135,7 @@ func (h *JobsHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 func (h *JobsHandler) List(w http.ResponseWriter, r *http.Request) {
 	list, err := h.Repo.List(r.Context())
 	if err != nil {
+		LoggerFrom(r.Context()).Error("list jobs", "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "failed to list jobs")
 		return
 	}
