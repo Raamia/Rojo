@@ -1,10 +1,13 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 )
@@ -51,6 +54,27 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
+}
+
+// Hijack forwards to the underlying ResponseWriter so that connection upgrades
+// (notably the WebSocket handshake on /stream) still work when this recorder is
+// in the chain. Because statusRecorder embeds the http.ResponseWriter interface
+// — not the concrete writer — the underlying Hijack method is not promoted, so
+// without this the /stream endpoint fails the upgrade with 501 Not Implemented.
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("underlying ResponseWriter does not support hijacking")
+	}
+	return hj.Hijack()
+}
+
+// Flush forwards to the underlying ResponseWriter when it supports flushing, so
+// streaming responses are not buffered by this wrapper.
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func newRequestID() string {
