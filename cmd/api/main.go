@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Raamia/Rojo/internal/api"
+	"github.com/Raamia/Rojo/internal/config"
 	"github.com/Raamia/Rojo/internal/events"
 	"github.com/Raamia/Rojo/internal/jobs"
 	"github.com/Raamia/Rojo/internal/orchestration"
@@ -23,21 +24,27 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	repo, store, closeRepo, err := buildRepository(logger)
+	cfg, err := config.Load()
+	if err != nil {
+		logger.Error("invalid config", "err", err)
+		os.Exit(2)
+	}
+
+	repo, store, closeRepo, err := buildRepository(logger, cfg)
 	if err != nil {
 		logger.Error("build repository", "err", err)
 		os.Exit(1)
 	}
 	defer closeRepo()
 
-	q := queue.New(64)
+	q := queue.New(cfg.QueueBuffer)
 	canceller := orchestration.NewCanceller()
 	var bus events.Bus = events.NewInProcessBus()
 	if store != nil {
 		bus = events.NewPersistingBus(bus, store)
 	}
 	processor := orchestration.NewProcessor(repo, canceller, bus)
-	pool := worker.NewPool(4, q, processor)
+	pool := worker.NewPool(cfg.WorkerCount, q, processor)
 	handler := api.NewJobsHandler(repo, q, canceller, bus)
 
 	workerCtx, cancelWorkers := context.WithCancel(context.Background())
@@ -61,7 +68,7 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr:              ":8080",
+		Addr:              cfg.HTTPAddr,
 		Handler:           api.LoggerMiddleware(logger)(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		// Bound how long a client may take to send a request and how long an
@@ -92,7 +99,7 @@ func main() {
 		logger.Error("server failed", "err", err)
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
@@ -106,14 +113,13 @@ func main() {
 	logger.Info("shutdown complete")
 }
 
-func buildRepository(logger *slog.Logger) (jobs.JobRepository, events.Store, func(), error) {
-	dbURL := os.Getenv("ROJO_DB_URL")
-	if dbURL == "" {
+func buildRepository(logger *slog.Logger, cfg config.Config) (jobs.JobRepository, events.Store, func(), error) {
+	if cfg.DBURL == "" {
 		logger.Warn("ROJO_DB_URL not set, using in-memory repository")
 		return jobs.NewInMemoryRepository(), nil, func() {}, nil
 	}
 	pool, err := postgres.NewPool(context.Background(), postgres.Config{
-		URL:      dbURL,
+		URL:      cfg.DBURL,
 		MaxConns: 8,
 	})
 	if err != nil {
