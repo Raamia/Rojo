@@ -24,6 +24,15 @@ const DefaultMaxTokens = 16000
 // a failure rather than an empty success.
 var ErrNoTextContent = errors.New("model returned no text content")
 
+// ErrTruncated means the model hit its output limit mid-answer.
+//
+// This matters more here than it looks. The implementor is asked for the
+// complete new contents of every file it changes, so one large file can exhaust
+// the budget partway through — and the truncated text is still valid-looking
+// prose that fails much later as "unexpected end of JSON input", which reads
+// like the model returned nonsense rather than like it ran out of room.
+var ErrTruncated = errors.New("model output was cut off at the token limit")
+
 // AnthropicClient is the production Client, backed by the official SDK.
 //
 // It exists behind the Client interface so the rest of the codebase never
@@ -106,6 +115,12 @@ func (c *AnthropicClient) Generate(ctx context.Context, req Request) (Response, 
 	}
 	if strings.TrimSpace(text.String()) == "" {
 		return Response{}, fmt.Errorf("%w (stop reason %q)", ErrNoTextContent, msg.StopReason)
+	}
+	// Checked after the empty case so a thinking-only reply still reports the
+	// more specific problem.
+	if msg.StopReason == anthropic.StopReasonMaxTokens {
+		return Response{}, fmt.Errorf("%w: %d tokens were not enough to finish the answer; "+
+			"the change is probably too large for one response", ErrTruncated, maxToks)
 	}
 
 	return Response{Text: text.String(), Model: string(msg.Model)}, nil

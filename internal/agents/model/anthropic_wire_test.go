@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -22,10 +23,11 @@ import (
 // captureServer records the request body and replies with a canned message.
 type captureServer struct {
 	*httptest.Server
-	body   map[string]any
-	raw    string
-	status int
-	reply  string
+	body       map[string]any
+	raw        string
+	status     int
+	reply      string
+	stopReason string
 }
 
 func newCaptureServer(t *testing.T) *captureServer {
@@ -38,13 +40,26 @@ func newCaptureServer(t *testing.T) *captureServer {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(cs.status)
-		reply := cs.reply
-		if reply == "" {
-			reply = `{"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-4-8",
-				"content":[{"type":"text","text":"{\"summary\":\"ok\"}"}],
-				"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}`
+		if cs.reply != "" && strings.HasPrefix(strings.TrimSpace(cs.reply), "{\"id\"") {
+			_, _ = io.WriteString(w, cs.reply) // a full canned envelope
+			return
 		}
-		_, _ = io.WriteString(w, reply)
+		text := cs.reply
+		if text == "" {
+			text = `{"summary":"ok"}`
+		}
+		stop := cs.stopReason
+		if stop == "" {
+			stop = "end_turn"
+		}
+		envelope, _ := json.Marshal(map[string]any{
+			"id": "msg_1", "type": "message", "role": "assistant",
+			"model":       "claude-opus-4-8",
+			"content":     []map[string]any{{"type": "text", "text": text}},
+			"stop_reason": stop,
+			"usage":       map[string]int{"input_tokens": 10, "output_tokens": 5},
+		})
+		_, _ = w.Write(envelope)
 	}))
 	t.Cleanup(cs.Close)
 	return cs
@@ -230,5 +245,34 @@ func TestWire_RespectsContextCancellation(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Generate ignored context cancellation")
+	}
+}
+
+// Running out of output tokens mid-answer returned success with truncated JSON,
+// so the job failed much later as "unexpected end of JSON input" — which reads
+// like the model returned nonsense rather than like it ran out of room. The
+// implementor is asked for whole files, so this is a routine failure on real
+// repositories, not an exotic one.
+func TestWire_TruncatedOutputIsAnError(t *testing.T) {
+	cs := newCaptureServer(t)
+	cs.reply = `{"operations":[{"kind":"write","path":"big.go","content":"package main\nfunc B(`
+	cs.stopReason = "max_tokens"
+
+	_, err := clientAgainst(cs).Generate(context.Background(), Request{Prompt: "rewrite big.go"})
+	if !errors.Is(err, ErrTruncated) {
+		t.Fatalf("got %v, want ErrTruncated", err)
+	}
+	// The message has to point at the cause, not just the symptom.
+	if !strings.Contains(err.Error(), "too large for one response") {
+		t.Errorf("error %q does not explain what to do about it", err)
+	}
+}
+
+// A complete answer is not truncated, whatever its length.
+func TestWire_NormalStopReasonIsNotAnError(t *testing.T) {
+	cs := newCaptureServer(t)
+	cs.stopReason = "end_turn"
+	if _, err := clientAgainst(cs).Generate(context.Background(), Request{Prompt: "hi"}); err != nil {
+		t.Errorf("end_turn should not be an error: %v", err)
 	}
 }
