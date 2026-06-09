@@ -67,9 +67,16 @@ func main() {
 		mux.HandleFunc("GET /api/v1/jobs/{jobID}/events", history.History)
 	}
 
+	var handlerChain http.Handler = mux
+	handlerChain = api.LoggerMiddleware(logger)(handlerChain)
+	handlerChain = api.NewRateLimiter(cfg.RateLimitBurst, cfg.RateLimitRPS).Middleware()(handlerChain)
+	if cfg.AuthToken != "" {
+		handlerChain = api.TokenAuth(cfg.AuthToken)(handlerChain)
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           api.LoggerMiddleware(logger)(mux),
+		Handler:           handlerChain,
 		ReadHeaderTimeout: 5 * time.Second,
 		// Bound how long a client may take to send a request and how long an
 		// idle keep-alive connection may sit. Without these a slowloris client

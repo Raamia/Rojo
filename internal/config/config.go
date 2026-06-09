@@ -15,6 +15,9 @@ type Config struct {
 	WorkerCount     int
 	WorktreeBaseDir string
 	ShutdownTimeout time.Duration
+	AuthToken       string
+	RateLimitBurst  int
+	RateLimitRPS    float64
 }
 
 func Load() (Config, error) {
@@ -25,6 +28,9 @@ func Load() (Config, error) {
 		WorkerCount:     getEnvInt("ROJO_WORKER_COUNT", 4),
 		WorktreeBaseDir: getEnv("ROJO_WORKTREE_DIR", "/tmp/rojo-worktrees"),
 		ShutdownTimeout: getEnvDuration("ROJO_SHUTDOWN_TIMEOUT", 15*time.Second),
+		AuthToken:       os.Getenv("ROJO_AUTH_TOKEN"),
+		RateLimitBurst:  getEnvInt("ROJO_RATE_LIMIT_BURST", 30),
+		RateLimitRPS:    getEnvFloat("ROJO_RATE_LIMIT_RPS", 5),
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -68,6 +74,15 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
+		}
+	}
+	return fallback
+}
+
+func getEnvFloat(key string, fallback float64) float64 {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
 		}
 	}
 	return fallback
