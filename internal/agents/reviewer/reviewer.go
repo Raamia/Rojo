@@ -22,13 +22,13 @@ const (
 var ErrInvalidDecision = errors.New("reviewer returned invalid decision")
 
 type Request struct {
-	Task           string                 `json:"task"`
-	Plan           planner.Plan           `json:"plan"`
-	Diff           string                 `json:"diff"`
-	Verification   verification.Report    `json:"verification"`
-	PriorFeedback  string                 `json:"prior_feedback,omitempty"`
-	ChangedFiles   []string               `json:"changed_files,omitempty"`
-	Extras         map[string]any         `json:"extras,omitempty"`
+	Task          string              `json:"task"`
+	Plan          planner.Plan        `json:"plan"`
+	Diff          string              `json:"diff"`
+	Verification  verification.Report `json:"verification"`
+	PriorFeedback string              `json:"prior_feedback,omitempty"`
+	ChangedFiles  []string            `json:"changed_files,omitempty"`
+	Extras        map[string]any      `json:"extras,omitempty"`
 }
 
 type Review struct {

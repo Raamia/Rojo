@@ -9,12 +9,12 @@ import (
 )
 
 var (
-	ErrPathEscape   = errors.New("path escapes workspace")
-	ErrProtected    = errors.New("path is protected")
-	ErrTooManyOps   = errors.New("too many operations in one attempt")
-	ErrOpTooLarge   = errors.New("operation exceeds max size")
-	ErrEmptyPath    = errors.New("path is empty")
-	ErrInvalidOp    = errors.New("invalid operation kind")
+	ErrPathEscape = errors.New("path escapes workspace")
+	ErrProtected  = errors.New("path is protected")
+	ErrTooManyOps = errors.New("too many operations in one attempt")
+	ErrOpTooLarge = errors.New("operation exceeds max size")
+	ErrEmptyPath  = errors.New("path is empty")
+	ErrInvalidOp  = errors.New("invalid operation kind")
 )
 
 const (

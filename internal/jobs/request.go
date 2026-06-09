@@ -25,10 +25,10 @@ type NewJobRequest struct {
 }
 
 var (
-	ErrTaskRequired    = errors.New("task is required")
-	ErrTaskTooShort    = errors.New("task is too short")
-	ErrTaskTooLong     = errors.New("task exceeds maximum length")
-	ErrRepoPathMissing = errors.New("repo_path is required")
+	ErrTaskRequired     = errors.New("task is required")
+	ErrTaskTooShort     = errors.New("task is too short")
+	ErrTaskTooLong      = errors.New("task exceeds maximum length")
+	ErrRepoPathMissing  = errors.New("repo_path is required")
 	ErrRepoPathRelative = errors.New("repo_path must be an absolute path")
 	ErrRepoPathTooLong  = errors.New("repo_path exceeds maximum length")
 	ErrNullByte         = errors.New("field contains a NUL byte")

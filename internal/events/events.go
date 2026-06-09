@@ -14,13 +14,13 @@ type Event struct {
 }
 
 const (
-	TypeJobCreated             = "job.created"
-	TypeJobStarted             = "job.started"
-	TypeJobCompleted           = "job.completed"
-	TypeJobFailed              = "job.failed"
-	TypeJobCancelled           = "job.cancelled"
-	TypeStepStarted            = "step.started"
-	TypeStepCompleted          = "step.completed"
+	TypeJobCreated    = "job.created"
+	TypeJobStarted    = "job.started"
+	TypeJobCompleted  = "job.completed"
+	TypeJobFailed     = "job.failed"
+	TypeJobCancelled  = "job.cancelled"
+	TypeStepStarted   = "step.started"
+	TypeStepCompleted = "step.completed"
 )
 
 type Subscription struct {
