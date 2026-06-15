@@ -1,7 +1,9 @@
 package api
 
 import (
+	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -75,7 +77,18 @@ func (rl *RateLimiter) Middleware() func(http.Handler) http.Handler {
 
 func clientKey(r *http.Request) string {
 	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		return fwd
+		// XFF is a comma-separated list "client, proxy1, proxy2"; the
+		// originating client is the first entry.
+		if i := strings.IndexByte(fwd, ','); i >= 0 {
+			fwd = fwd[:i]
+		}
+		return strings.TrimSpace(fwd)
+	}
+	// RemoteAddr is "IP:port". Key on the IP alone so all connections from
+	// one client share a bucket — otherwise every new TCP connection (a fresh
+	// ephemeral port) gets its own full bucket and the limit is bypassable.
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
 	}
 	return r.RemoteAddr
 }
