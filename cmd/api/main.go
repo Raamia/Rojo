@@ -72,6 +72,11 @@ func main() {
 	handlerChain = api.NewRateLimiter(cfg.RateLimitBurst, cfg.RateLimitRPS).Middleware()(handlerChain)
 	if cfg.AuthToken != "" {
 		handlerChain = api.TokenAuth(cfg.AuthToken)(handlerChain)
+	} else {
+		// A dropped or misspelled ROJO_AUTH_TOKEN silently leaves the whole API
+		// — including job submission, which executes code — open to anyone who
+		// can reach the port. Make that state impossible to deploy unnoticed.
+		logger.Warn("ROJO_AUTH_TOKEN not set: authentication is DISABLED and every endpoint is publicly accessible")
 	}
 
 	srv := &http.Server{
