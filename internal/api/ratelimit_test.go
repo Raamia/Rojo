@@ -23,7 +23,8 @@ func TestRateLimiter_KeysByIPNotPort(t *testing.T) {
 	ports := []string{"1111", "2222", "3333", "4444", "5555"}
 	var allowed, limited int
 	for _, p := range ports {
-		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		// Deliberately not the health path: that one is exempt from limiting.
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs", nil)
 		req.RemoteAddr = "203.0.113.7:" + p
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
