@@ -57,6 +57,16 @@ func NewRateLimiter(capacity int, refillPerSec float64) *RateLimiter {
 func (rl *RateLimiter) Middleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Liveness/readiness probes must never be rate limited. They share
+			// a source IP with ordinary traffic (or with each other behind a
+			// NAT/ingress), so under exactly the load spike where the process
+			// needs to stay up, probes would start getting 429s and the
+			// orchestrator would restart a healthy pod — shedding capacity and
+			// pushing the spike onto the remaining ones.
+			if r.URL.Path == healthPath {
+				next.ServeHTTP(w, r)
+				return
+			}
 			key := clientKey(r)
 			rl.mu.Lock()
 			b, ok := rl.buckets[key]
