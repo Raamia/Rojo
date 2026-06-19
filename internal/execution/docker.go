@@ -6,6 +6,15 @@ import (
 	"time"
 )
 
+// DefaultImage carries the toolchain jobs are verified with. Keep it in step
+// with the go directive in go.mod.
+const DefaultImage = "golang:1.25-alpine"
+
+// DockerRunner is built but not wired into cmd/api. Running each job's checks
+// in a disposable container is the Phase 10 goal; doing it needs either
+// Docker-in-Docker or a mounted docker socket, and mounting the socket hands
+// the container effective root on the host — which is a decision to make
+// deliberately, not a default to drift into.
 type DockerRunner struct {
 	inner   CommandRunner
 	image   string
@@ -25,7 +34,11 @@ type DockerOptions struct {
 
 func NewDockerRunner(inner CommandRunner, opts DockerOptions) *DockerRunner {
 	if opts.Image == "" {
-		opts.Image = "golang:1.23-alpine"
+		// Must be at least the Go version in go.mod. An older toolchain refuses
+		// the module outright ("go.mod requires go >= 1.25.0"), so every check
+		// would fail before running — and it would look like the code was
+		// broken rather than the image.
+		opts.Image = DefaultImage
 	}
 	if opts.Memory == "" {
 		opts.Memory = "512m"

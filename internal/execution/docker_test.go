@@ -2,6 +2,9 @@ package execution
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -46,7 +49,7 @@ func TestDockerRunner_BuildsExpectedArgv(t *testing.T) {
 		"--network none",
 		"--workdir /workspace",
 		"-v /work/job-1:/workspace",
-		"golang:1.23-alpine go test ./...",
+		"golang:1.25-alpine go test ./...",
 	}
 	for _, w := range wantContains {
 		if !strings.Contains(got, w) {
@@ -55,7 +58,7 @@ func TestDockerRunner_BuildsExpectedArgv(t *testing.T) {
 	}
 
 	// The user's command + args must come AFTER the image, not before.
-	imageIdx := indexOf(rec.args, "golang:1.23-alpine")
+	imageIdx := indexOf(rec.args, DefaultImage)
 	cmdIdx := indexOf(rec.args, "go")
 	if imageIdx < 0 || cmdIdx < 0 || cmdIdx != imageIdx+1 {
 		t.Errorf("expected user command immediately after image; args=%v", rec.args)
@@ -91,4 +94,22 @@ func indexOf(ss []string, target string) int {
 		}
 	}
 	return -1
+}
+
+// An image older than the module's go directive fails every check before it
+// runs, and the failure reads as broken code rather than a stale image.
+func TestDockerRunner_DefaultImageMatchesTheModuleGoVersion(t *testing.T) {
+	mod, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^go (\d+)\.(\d+)`).FindStringSubmatch(string(mod))
+	if m == nil {
+		t.Fatalf("no go directive in go.mod")
+	}
+	want := "golang:" + m[1] + "." + m[2]
+	if !strings.HasPrefix(DefaultImage, want) {
+		t.Errorf("DefaultImage = %q, want it to start with %q (go.mod requires %s.%s)",
+			DefaultImage, want, m[1], m[2])
+	}
 }

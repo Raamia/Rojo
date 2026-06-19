@@ -325,7 +325,7 @@ func TestSecurity_DockerRunner_MissingContainerHardeningFlags_DocumentsGap(t *te
 		t.Logf("MISSING: %s", a)
 	}
 
-	if !strings.Contains(argv, "golang:1.23-alpine") || strings.Contains(argv, "@sha256:") {
+	if !strings.Contains(argv, DefaultImage) || strings.Contains(argv, "@sha256:") {
 		t.Log("MISSING: image is a mutable tag (golang:1.23-alpine), not pinned by digest")
 	}
 }
