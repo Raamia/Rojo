@@ -47,12 +47,11 @@ func (r *resStubRunner) commands() []string {
 // FAILURE MODE 4 — cleanup reports success while leaking the worktree
 // ---------------------------------------------------------------------------
 
-// GitWorkspaceManager.Cleanup (git.go:58-63) checks only the error return of
-// runner.Run and ignores CommandResult.ExitCode. Because a failing git command
-// yields (ExitCode: 1, nil), every ordinary git failure is invisible: the
-// os.RemoveAll fallback never runs, `git branch -D` is never retried, and
-// Cleanup returns nil. The caller believes the workspace is gone.
-func TestResilience_CleanupIgnoresGitExitCodeAndLeaksWorktreeSilently(t *testing.T) {
+// FIXED: Cleanup now checks CommandResult.ExitCode as well as the error
+// return, so an ordinary git failure (which yields (ExitCode: 1, nil)) triggers
+// the os.RemoveAll fallback, prunes the stale worktree registration, and is
+// reported to the caller instead of passing as success.
+func TestResilience_CleanupDetectsGitExitCodeAndDoesNotLeak(t *testing.T) {
 	baseDir := t.TempDir()
 	wtPath := filepath.Join(baseDir, "job-leak")
 	if err := os.MkdirAll(wtPath, 0o755); err != nil {
@@ -71,14 +70,20 @@ func TestResilience_CleanupIgnoresGitExitCodeAndLeaksWorktreeSilently(t *testing
 		Path:     wtPath,
 		RepoPath: t.TempDir(),
 	})
-	if err != nil {
-		t.Fatalf("Cleanup returned %v, want nil — exit codes are now checked, re-baseline this test", err)
+	if err == nil {
+		t.Fatal("Cleanup returned nil despite every git command failing")
 	}
 
-	if _, statErr := os.Stat(wtPath); statErr != nil {
-		t.Fatalf("worktree directory was removed (%v) — the RemoveAll fallback now runs, re-baseline this test", statErr)
+	// The directory must be gone even though git refused to remove it.
+	if _, statErr := os.Stat(wtPath); !os.IsNotExist(statErr) {
+		t.Fatalf("worktree directory still exists after the fallback: %v", statErr)
 	}
-	t.Logf("CONFIRMED: Cleanup returned nil while %s still exists; commands issued: %v", wtPath, runner.commands())
+	// And the failures must be visible, not swallowed.
+	for _, want := range []string{"prune", "delete branch"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q is missing %q; commands issued: %v", err, want, runner.commands())
+		}
+	}
 }
 
 // The error branch that does work — os.RemoveAll — only fires when the git
