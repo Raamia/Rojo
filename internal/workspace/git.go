@@ -13,6 +13,27 @@ import (
 
 const branchPrefix = "rojo/job/"
 
+// gitArgs prefixes a git invocation with flags that disable the two ways a
+// repository can make git execute code chosen by whoever wrote that repository.
+//
+// The repo path is supplied by the caller of the API, and `git worktree add`
+// performs a checkout — which runs that repository's post-checkout hook as the
+// server user. core.fsmonitor is the same class of hole: git will happily run
+// whatever command a repo-local .git/config names, on ordinary operations.
+// Command-line -c beats repo-local config, so setting them here overrides
+// anything the repository specifies.
+//
+// This is a mitigation, not a sandbox: it does not stop a repo from being huge,
+// and it says nothing about what the job's own build tooling does. Restricting
+// repo paths to an allowlist of trusted roots is the complementary control.
+func gitArgs(args ...string) []string {
+	hardened := []string{
+		"-c", "core.hooksPath=/dev/null",
+		"-c", "core.fsmonitor=false",
+	}
+	return append(hardened, args...)
+}
+
 type GitWorkspaceManager struct {
 	runner  execution.CommandRunner
 	baseDir string
@@ -33,7 +54,7 @@ func (m *GitWorkspaceManager) Create(ctx context.Context, jobID, repoPath string
 	branch := branchPrefix + jobID
 	worktreePath := filepath.Join(m.baseDir, jobID)
 
-	res, err := m.runner.Run(ctx, repoPath, "git", "worktree", "add", "-b", branch, worktreePath)
+	res, err := m.runner.Run(ctx, repoPath, "git", gitArgs("worktree", "add", "-b", branch, worktreePath)...)
 	if err != nil {
 		return nil, fmt.Errorf("git worktree add: %w: %s", err, res.Stderr)
 	}
@@ -69,7 +90,7 @@ func (m *GitWorkspaceManager) Cleanup(ctx context.Context, ws *Workspace) error 
 	// A command that runs and exits non-zero comes back as (result, nil) — the
 	// failure is in ExitCode, not err — so both have to be checked or a failed
 	// removal looks like success.
-	res, err := m.runner.Run(deadline, ws.RepoPath, "git", "worktree", "remove", "--force", ws.Path)
+	res, err := m.runner.Run(deadline, ws.RepoPath, "git", gitArgs("worktree", "remove", "--force", ws.Path)...)
 	if err != nil || res.ExitCode != 0 {
 		if rmErr := os.RemoveAll(ws.Path); rmErr != nil {
 			errs = append(errs, fmt.Errorf("remove worktree dir %s: %w", ws.Path, rmErr))
@@ -78,14 +99,14 @@ func (m *GitWorkspaceManager) Cleanup(ctx context.Context, ws *Workspace) error 
 		// registered: `git worktree list` keeps reporting it and `git branch -D`
 		// can refuse to delete a branch git believes is checked out. Prune the
 		// stale registration so the fallback is actually equivalent.
-		if pruneRes, pruneErr := m.runner.Run(deadline, ws.RepoPath, "git", "worktree", "prune"); pruneErr != nil {
+		if pruneRes, pruneErr := m.runner.Run(deadline, ws.RepoPath, "git", gitArgs("worktree", "prune")...); pruneErr != nil {
 			errs = append(errs, fmt.Errorf("prune worktrees: %w", pruneErr))
 		} else if pruneRes.ExitCode != 0 {
 			errs = append(errs, fmt.Errorf("git worktree prune exited %d: %s", pruneRes.ExitCode, pruneRes.Stderr))
 		}
 	}
 
-	res, err = m.runner.Run(deadline, ws.RepoPath, "git", "branch", "-D", ws.Branch)
+	res, err = m.runner.Run(deadline, ws.RepoPath, "git", gitArgs("branch", "-D", ws.Branch)...)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("delete branch %s: %w", ws.Branch, err))
 	} else if res.ExitCode != 0 {

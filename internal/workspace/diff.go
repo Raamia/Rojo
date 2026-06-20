@@ -12,7 +12,7 @@ func (m *GitWorkspaceManager) Diff(ctx context.Context, ws *Workspace) (string, 
 	if ws == nil {
 		return "", ErrWorktreeNotFound
 	}
-	res, err := m.runner.Run(ctx, ws.Path, "git", "diff", "HEAD")
+	res, err := m.runner.Run(ctx, ws.Path, "git", gitArgs("diff", "HEAD")...)
 	if err != nil {
 		return "", fmt.Errorf("git diff: %w: %s", err, res.Stderr)
 	}
@@ -27,7 +27,7 @@ func (m *GitWorkspaceManager) ListOrphans(ctx context.Context, repoPath string) 
 		return nil, err
 	}
 
-	res, err := m.runner.Run(ctx, repoPath, "git", "worktree", "list", "--porcelain")
+	res, err := m.runner.Run(ctx, repoPath, "git", gitArgs("worktree", "list", "--porcelain")...)
 	if err != nil {
 		return nil, fmt.Errorf("git worktree list: %w", err)
 	}

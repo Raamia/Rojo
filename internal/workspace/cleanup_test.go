@@ -20,6 +20,7 @@ type scriptedRunner struct {
 }
 
 func (r *scriptedRunner) Run(_ context.Context, _ string, command string, args ...string) (execution.CommandResult, error) {
+	args = stripGitConfigFlags(args)
 	key := command
 	if len(args) > 0 {
 		key = command + " " + args[0]
@@ -29,6 +30,15 @@ func (r *scriptedRunner) Run(_ context.Context, _ string, command string, args .
 	}
 	r.calls = append(r.calls, key)
 	return r.results[key], r.errs[key]
+}
+
+// stripGitConfigFlags drops the leading `-c key=value` pairs that gitArgs
+// prepends, so tests can key on the subcommand.
+func stripGitConfigFlags(args []string) []string {
+	for len(args) >= 2 && args[0] == "-c" {
+		args = args[2:]
+	}
+	return args
 }
 
 func (r *scriptedRunner) called(prefix string) bool {
