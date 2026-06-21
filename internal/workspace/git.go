@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/Raamia/Rojo/internal/execution"
@@ -37,6 +38,15 @@ func gitArgs(args ...string) []string {
 type GitWorkspaceManager struct {
 	runner  execution.CommandRunner
 	baseDir string
+
+	// mu serialises worktree creation. `git worktree add` takes locks on the
+	// source repository, and concurrent adds against the same repo intermittently
+	// fail with exit 128 — observed once in CI-like load, where several workers
+	// were preparing worktrees at the same moment. Creation is fast and rare
+	// compared to the verification that follows it, so serialising costs almost
+	// nothing and removes a failure mode that would otherwise surface as a
+	// randomly failed job.
+	mu sync.Mutex
 }
 
 func NewGitWorkspaceManager(runner execution.CommandRunner, baseDir string) *GitWorkspaceManager {
@@ -54,7 +64,9 @@ func (m *GitWorkspaceManager) Create(ctx context.Context, jobID, repoPath string
 	branch := branchPrefix + jobID
 	worktreePath := filepath.Join(m.baseDir, jobID)
 
+	m.mu.Lock()
 	res, err := m.runner.Run(ctx, repoPath, "git", gitArgs("worktree", "add", "-b", branch, worktreePath)...)
+	m.mu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("git worktree add: %w: %s", err, res.Stderr)
 	}
