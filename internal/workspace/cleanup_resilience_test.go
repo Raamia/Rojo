@@ -125,9 +125,9 @@ func TestResilience_CleanupFallbackOnlyRunsWhenGitCannotBeExecuted(t *testing.T)
 
 // ListOrphans is implemented and unit-tested, but no production code path calls
 // it. cmd/api/main.go performs no startup sweep, so worktrees left behind by a
-// crash accumulate in ROJO_WORKTREE_DIR forever. (Today the orchestrator never
-// creates a worktree at all — see the companion assertion below — so nothing
-// leaks yet; the moment the workspace manager is wired in, it will.)
+// crash accumulate in ROJO_WORKTREE_DIR forever. The orchestrator now creates a
+// worktree per job and removes it on every exit path, so this only bites when
+// the process dies before its deferred cleanup runs — a crash or SIGKILL.
 func TestResilience_NoProductionCallerInvokesListOrphans(t *testing.T) {
 	allowed := map[string]bool{
 		filepath.Join("internal", "workspace", "diff.go"):    true, // definition
@@ -141,19 +141,52 @@ func TestResilience_NoProductionCallerInvokesListOrphans(t *testing.T) {
 	t.Log("CONFIRMED: no startup or periodic sweep calls ListOrphans; orphaned worktrees are never reclaimed")
 }
 
-// The orchestration pipeline does not create workspaces yet: nothing outside
-// the package's own tests even imports internal/workspace. Failure mode
-// "crash mid-job leaks a worktree" is therefore currently vacuous — and so is
-// the entire preparing_workspace step, which only sleeps 50ms.
-func TestResilience_OrchestrationDoesNotCreateWorkspacesYet(t *testing.T) {
+// The orchestration pipeline now creates a worktree per job, so the guarantee
+// that matters is the cleanup path rather than the absence of one. Cleanup is
+// registered as a defer before any workspace can be assigned, which covers
+// success, error, cancellation and panic alike; the behavioral proof lives in
+// internal/orchestration/workspace_test.go. This test just pins the wiring so
+// the manager cannot be silently dropped from main.go.
+func TestResilience_OrchestrationCreatesAndOwnsWorkspaces(t *testing.T) {
 	importers := resGrepGoSources(t, "Rojo/internal/workspace", nil)
+
+	var wiredInMain, wiredInProcessor bool
 	for _, f := range importers {
-		if strings.HasPrefix(f, filepath.Join("internal", "workspace")) {
-			continue
+		switch f {
+		case filepath.Join("cmd", "api", "main.go"):
+			wiredInMain = true
+		case filepath.Join("internal", "orchestration", "processor.go"):
+			wiredInProcessor = true
 		}
-		t.Fatalf("%s now imports internal/workspace — the pipeline creates worktrees, re-baseline this test and audit every cleanup path", f)
 	}
-	t.Log("CONFIRMED: no production package imports internal/workspace; Processor.Process creates no worktree and so cannot leak one")
+	if !wiredInMain {
+		t.Error("cmd/api/main.go no longer constructs a workspace manager; jobs would run without an isolated checkout")
+	}
+	if !wiredInProcessor {
+		t.Error("internal/orchestration/processor.go no longer references internal/workspace")
+	}
+
+	// The cleanup call must stay in the processor, and stay deferred.
+	src := resReadFile(t, filepath.Join("internal", "orchestration", "processor.go"))
+	if !strings.Contains(src, "p.Workspaces.Cleanup(") {
+		t.Error("Processor no longer calls Cleanup; every job would leak its worktree")
+	}
+	if !strings.Contains(src, "defer func() {") {
+		t.Error("Cleanup is no longer deferred; it would be skipped on early returns and panics")
+	}
+}
+
+func resReadFile(t *testing.T, rel string) string {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("resolve module root: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(root, rel))
+	if err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+	return string(b)
 }
 
 // resGrepGoSources walks the module root and returns every non-test .go file

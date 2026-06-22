@@ -21,6 +21,8 @@ const (
 	TypeJobCancelled  = "job.cancelled"
 	TypeStepStarted   = "step.started"
 	TypeStepCompleted = "step.completed"
+
+	TypeWorkspaceCreated = "workspace.created"
 )
 
 type Subscription struct {

@@ -13,11 +13,13 @@ import (
 	"github.com/Raamia/Rojo/internal/api"
 	"github.com/Raamia/Rojo/internal/config"
 	"github.com/Raamia/Rojo/internal/events"
+	"github.com/Raamia/Rojo/internal/execution"
 	"github.com/Raamia/Rojo/internal/jobs"
 	"github.com/Raamia/Rojo/internal/orchestration"
 	"github.com/Raamia/Rojo/internal/queue"
 	"github.com/Raamia/Rojo/internal/storage/postgres"
 	"github.com/Raamia/Rojo/internal/worker"
+	"github.com/Raamia/Rojo/internal/workspace"
 )
 
 func main() {
@@ -43,7 +45,17 @@ func main() {
 	if store != nil {
 		bus = events.NewPersistingBus(bus, store)
 	}
-	processor := orchestration.NewProcessor(repo, canceller, bus)
+	// Git runs through the allowlisted runner rather than raw exec, so the
+	// orchestrator can only ever invoke git, with a bounded runtime.
+	gitRunner := execution.NewSafeRunner(
+		execution.NewExecRunner(),
+		execution.NewAllowlist("git"),
+		5*time.Minute,
+	)
+	workspaces := workspace.NewGitWorkspaceManager(gitRunner, cfg.WorktreeBaseDir)
+	logger.Info("worktree base dir", "path", cfg.WorktreeBaseDir)
+
+	processor := orchestration.NewProcessor(repo, canceller, bus, workspaces)
 	pool := worker.NewPool(cfg.WorkerCount, q, processor)
 	handler := api.NewJobsHandler(repo, q, canceller, bus)
 
