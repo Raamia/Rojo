@@ -39,7 +39,7 @@ func TestLoad_Defaults(t *testing.T) {
 	}
 
 	want := Config{
-		HTTPAddr:        ":8080",
+		HTTPAddr:        DefaultHTTPAddr,
 		DBURL:           "",
 		QueueBuffer:     64,
 		WorkerCount:     4,
@@ -155,7 +155,7 @@ func TestLoad_BadValuesFallBack(t *testing.T) {
 // individual cases mutate into an invalid state.
 func validConfig() Config {
 	return Config{
-		HTTPAddr:        ":8080",
+		HTTPAddr:        DefaultHTTPAddr,
 		QueueBuffer:     64,
 		WorkerCount:     4,
 		WorktreeBaseDir: "/tmp/rojo-worktrees",

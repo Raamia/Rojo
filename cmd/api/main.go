@@ -98,7 +98,19 @@ func main() {
 		// A dropped or misspelled ROJO_AUTH_TOKEN silently leaves the whole API
 		// — including job submission, which executes code — open to anyone who
 		// can reach the port. Make that state impossible to deploy unnoticed.
-		logger.Warn("ROJO_AUTH_TOKEN not set: authentication is DISABLED and every endpoint is publicly accessible")
+		if cfg.IsPubliclyBound() {
+			// The dangerous combination, and the only one worth shouting about:
+			// reachable from the network *and* unauthenticated, on a service
+			// whose job-creation endpoint executes code.
+			logger.Error("REACHABLE FROM THE NETWORK WITH NO AUTHENTICATION",
+				"addr", cfg.HTTPAddr,
+				"risk", "anyone who can reach this address can run code on this machine",
+				"fix", "set ROJO_AUTH_TOKEN, or bind loopback with ROJO_HTTP_ADDR=127.0.0.1:8080")
+		} else {
+			logger.Warn("ROJO_AUTH_TOKEN not set: authentication is disabled",
+				"addr", cfg.HTTPAddr,
+				"mitigation", "bound to loopback, so only this machine can reach it")
+		}
 	}
 
 	srv := &http.Server{

@@ -43,27 +43,25 @@ func TestSecurity_AuthTokenIsOptionalAndUnvalidated_DocumentsGap(t *testing.T) {
 		"and no support for token rotation or multiple tokens.")
 }
 
-// The rate limiter's parameters are never validated. Zero or negative values
-// are accepted and produce a bucket that can never issue a token, i.e. the
-// service 429s every request — a self-inflicted outage from a config typo.
-func TestSecurity_RateLimitConfigUnvalidated_DocumentsGap(t *testing.T) {
+// A zero or negative bucket can never issue a token, so the service refuses
+// every request with 429 — a self-inflicted outage from one typo, and one that
+// reads as "the server is broken" rather than "the config is wrong". Startup is
+// where that has to be caught.
+func TestSecurity_RateLimitConfigIsValidated(t *testing.T) {
 	for _, tc := range []struct{ burst, rps string }{
 		{"0", "5"},
 		{"-5", "5"},
 		{"30", "0"},
 		{"30", "-1"},
 	} {
-		t.Setenv("ROJO_RATE_LIMIT_BURST", tc.burst)
-		t.Setenv("ROJO_RATE_LIMIT_RPS", tc.rps)
-		cfg, err := Load()
-		if err != nil {
-			t.Fatalf("VULNERABILITY FIXED? burst=%s rps=%s now rejected: %v", tc.burst, tc.rps, err)
-		}
-		t.Logf("ACCEPTED burst=%d rps=%v (Validate() checks HTTPAddr/QueueBuffer/WorkerCount/"+
-			"ShutdownTimeout only)", cfg.RateLimitBurst, cfg.RateLimitRPS)
+		t.Run("burst="+tc.burst+" rps="+tc.rps, func(t *testing.T) {
+			t.Setenv("ROJO_RATE_LIMIT_BURST", tc.burst)
+			t.Setenv("ROJO_RATE_LIMIT_RPS", tc.rps)
+			if _, err := Load(); err == nil {
+				t.Errorf("burst=%s rps=%s was accepted; it refuses every request", tc.burst, tc.rps)
+			}
+		})
 	}
-	t.Log("IMPACT: burst<=0 makes tokenBucket.allow() return false forever — every request gets 429. " +
-		"A very large burst silently disables the limiter. Neither is caught at startup.")
 }
 
 // Malformed numeric/duration environment variables are swallowed by

@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"time"
@@ -22,7 +23,7 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		HTTPAddr:        getEnv("ROJO_HTTP_ADDR", ":8080"),
+		HTTPAddr:        getEnv("ROJO_HTTP_ADDR", DefaultHTTPAddr),
 		DBURL:           os.Getenv("ROJO_DB_URL"),
 		QueueBuffer:     getEnvInt("ROJO_QUEUE_BUFFER", 64),
 		WorkerCount:     getEnvInt("ROJO_WORKER_COUNT", 4),
@@ -38,6 +39,31 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
+const DefaultHTTPAddr = "127.0.0.1:8080"
+
+// IsPubliclyBound reports whether HTTPAddr accepts connections from beyond
+// this machine.
+func (c Config) IsPubliclyBound() bool {
+	host, _, err := net.SplitHostPort(c.HTTPAddr)
+	if err != nil {
+		return true
+	}
+	if host == "" {
+		return true
+	}
+	if host == "localhost" {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return true
+	}
+	if ip.IsUnspecified() {
+		return true
+	}
+	return !ip.IsLoopback()
+}
+
 func (c Config) Validate() error {
 	if c.HTTPAddr == "" {
 		return errors.New("ROJO_HTTP_ADDR must not be empty")
@@ -50,6 +76,12 @@ func (c Config) Validate() error {
 	}
 	if c.ShutdownTimeout <= 0 {
 		return fmt.Errorf("ROJO_SHUTDOWN_TIMEOUT must be positive, got %s", c.ShutdownTimeout)
+	}
+	if c.RateLimitBurst <= 0 {
+		return fmt.Errorf("ROJO_RATE_LIMIT_BURST must be positive, got %d (zero refuses every request)", c.RateLimitBurst)
+	}
+	if c.RateLimitRPS <= 0 {
+		return fmt.Errorf("ROJO_RATE_LIMIT_RPS must be positive, got %v (zero never refills the bucket)", c.RateLimitRPS)
 	}
 	return nil
 }

@@ -43,7 +43,7 @@ pipeline.
 
 | Env var                    | Default                     | Description                       |
 | -------------------------- | --------------------------- | --------------------------------- |
-| `ROJO_HTTP_ADDR`          | `:8080`                     | API listen address                |
+| `ROJO_HTTP_ADDR`          | `127.0.0.1:8080`            | API listen address. Loopback by default |
 | `ROJO_DB_URL`             | *(unset → in-memory repo)*  | Postgres connection URL           |
 | `ROJO_QUEUE_BUFFER`       | `64`                        | Job queue capacity                |
 | `ROJO_WORKER_COUNT`       | `4`                         | Worker pool size                  |
@@ -53,10 +53,9 @@ pipeline.
 | `ROJO_RATE_LIMIT_BURST`   | `30`                        | Token-bucket capacity per client IP |
 | `ROJO_RATE_LIMIT_RPS`     | `5`                         | Token refill per second           |
 
-> **Leaving `ROJO_AUTH_TOKEN` unset disables authentication entirely** and makes
-> every endpoint — including job submission, which executes code — reachable by
-> anyone who can open a connection. The server logs a warning at startup when it
-> is in this state. Only run without a token on a trusted local machine.
+> **Rojo binds loopback by default.** Job submission executes code, and
+> authentication is off until `ROJO_AUTH_TOKEN` is set. If you expose the
+> service with `ROJO_HTTP_ADDR`, set a token at the same time.
 
 Values that cannot be parsed fall back to the default **without an error**, so a
 typo like `ROJO_WORKER_COUNT=0x10` silently yields 4 workers. Check the startup
