@@ -123,7 +123,7 @@ func TestProcessor_HappyPathReachesCompleted(t *testing.T) {
 	sub := bus.Subscribe(jobID, 128)
 	defer bus.Unsubscribe(sub)
 
-	p := NewProcessor(repo, canc, bus, nil)
+	p := NewProcessor(repo, canc, bus, nil, nil)
 
 	done := make(chan error, 1)
 	go func() { done <- p.Process(context.Background(), jobID) }()
@@ -177,7 +177,7 @@ func TestProcessor_CancelMidFlightReachesCancelled(t *testing.T) {
 	sub := bus.Subscribe(jobID, 128)
 	defer bus.Unsubscribe(sub)
 
-	p := NewProcessor(repo, canc, bus, nil)
+	p := NewProcessor(repo, canc, bus, nil, nil)
 
 	done := make(chan error, 1)
 	go func() { done <- p.Process(context.Background(), jobID) }()

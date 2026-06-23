@@ -9,8 +9,16 @@ import (
 
 	"github.com/Raamia/Rojo/internal/events"
 	"github.com/Raamia/Rojo/internal/jobs"
+	"github.com/Raamia/Rojo/internal/verification"
 	"github.com/Raamia/Rojo/internal/workspace"
 )
+
+// Verifier runs the deterministic quality gate against a checked-out
+// workspace. Declared here rather than imported as a concrete type so the
+// processor can be tested without running real commands.
+type Verifier interface {
+	Verify(ctx context.Context, dir string) (verification.Report, error)
+}
 
 type Processor struct {
 	Repo      jobs.JobRepository
@@ -19,10 +27,13 @@ type Processor struct {
 	// Workspaces is optional. When nil the job walks its states without an
 	// isolated checkout, which is what the pure state-machine tests want.
 	Workspaces workspace.WorkspaceManager
+	// Verifier is optional and only runs when a workspace exists — there is
+	// nothing meaningful to check without a checkout.
+	Verifier Verifier
 }
 
-func NewProcessor(repo jobs.JobRepository, c *Canceller, bus events.Bus, ws workspace.WorkspaceManager) *Processor {
-	return &Processor{Repo: repo, Canceller: c, Bus: bus, Workspaces: ws}
+func NewProcessor(repo jobs.JobRepository, c *Canceller, bus events.Bus, ws workspace.WorkspaceManager, v Verifier) *Processor {
+	return &Processor{Repo: repo, Canceller: c, Bus: bus, Workspaces: ws, Verifier: v}
 }
 
 func (p *Processor) emit(ctx context.Context, jobID, eventType string, payload map[string]any) {
@@ -108,6 +119,30 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 				"path":   ws.Path,
 				"branch": ws.Branch,
 			})
+		}
+
+		if next == jobs.StatusVerifying && p.Verifier != nil && ws != nil {
+			report, vErr := p.Verifier.Verify(jobCtx, ws.Path)
+			if vErr != nil {
+				return p.markFailed(job, fmt.Errorf("run verification for job %s: %w", jobID, vErr))
+			}
+
+			// Emitting the report persists it: PersistingBus writes event
+			// payloads to the events table, so the results survive without a
+			// dedicated schema.
+			p.emit(jobCtx, jobID, events.TypeVerificationCompleted, map[string]any{
+				"passed":  report.AllPassed(),
+				"summary": report.Summary(),
+				"results": report.Results,
+			})
+			log.Info("verification complete", "passed", report.AllPassed(), "summary", report.Summary())
+
+			// Deterministic checks outrank everything downstream: a job whose
+			// gate failed must not reach completed. Once the reviewer exists
+			// this becomes a revision cycle rather than a terminal failure.
+			if !report.AllPassed() {
+				return p.markFailed(job, fmt.Errorf("verification failed: %s", report.Summary()))
+			}
 		}
 
 		log.Info("step complete", "status", next)

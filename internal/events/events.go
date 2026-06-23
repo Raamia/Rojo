@@ -22,7 +22,8 @@ const (
 	TypeStepStarted   = "step.started"
 	TypeStepCompleted = "step.completed"
 
-	TypeWorkspaceCreated = "workspace.created"
+	TypeWorkspaceCreated      = "workspace.created"
+	TypeVerificationCompleted = "verification.completed"
 )
 
 type Subscription struct {

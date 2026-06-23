@@ -18,6 +18,7 @@ import (
 	"github.com/Raamia/Rojo/internal/orchestration"
 	"github.com/Raamia/Rojo/internal/queue"
 	"github.com/Raamia/Rojo/internal/storage/postgres"
+	"github.com/Raamia/Rojo/internal/verification"
 	"github.com/Raamia/Rojo/internal/worker"
 	"github.com/Raamia/Rojo/internal/workspace"
 )
@@ -55,7 +56,16 @@ func main() {
 	workspaces := workspace.NewGitWorkspaceManager(gitRunner, cfg.WorktreeBaseDir)
 	logger.Info("worktree base dir", "path", cfg.WorktreeBaseDir)
 
-	processor := orchestration.NewProcessor(repo, canceller, bus, workspaces)
+	// Verification gets its own runner and allowlist: it may invoke the Go
+	// toolchain, never git, and vice versa.
+	verifyRunner := execution.NewSafeRunner(
+		execution.NewExecRunner(),
+		execution.NewAllowlist("go", "gofmt"),
+		10*time.Minute,
+	)
+	verifier := verification.NewRunner(verifyRunner)
+
+	processor := orchestration.NewProcessor(repo, canceller, bus, workspaces, verifier)
 	pool := worker.NewPool(cfg.WorkerCount, q, processor)
 	handler := api.NewJobsHandler(repo, q, canceller, bus)
 
