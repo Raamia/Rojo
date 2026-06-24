@@ -30,6 +30,22 @@ type Processor struct {
 	// Verifier is optional and only runs when a workspace exists — there is
 	// nothing meaningful to check without a checkout.
 	Verifier Verifier
+	// JobTimeout bounds one job's total execution. A zero value falls back to
+	// DefaultJobTimeout rather than meaning "unlimited": a job that can run
+	// forever holds its worker slot forever, and with the default four workers
+	// four such jobs stall the whole service. There is deliberately no way to
+	// configure an unbounded job.
+	JobTimeout time.Duration
+}
+
+// DefaultJobTimeout applies when a Processor is built without an explicit one.
+const DefaultJobTimeout = 30 * time.Minute
+
+func (p *Processor) jobTimeout() time.Duration {
+	if p.JobTimeout <= 0 {
+		return DefaultJobTimeout
+	}
+	return p.JobTimeout
 }
 
 func NewProcessor(repo jobs.JobRepository, c *Canceller, bus events.Bus, ws workspace.WorkspaceManager, v Verifier) *Processor {
@@ -50,8 +66,16 @@ func (p *Processor) emit(ctx context.Context, jobID, eventType string, payload m
 func (p *Processor) Process(ctx context.Context, jobID string) error {
 	log := slog.With("job_id", jobID)
 
-	jobCtx, cancel := context.WithCancel(ctx)
+	// Two layers: an outer cancel the Canceller can fire on request, and an
+	// inner deadline. Cancelling the outer propagates inward, so the Canceller
+	// still tracks a single func that stops everything, while the deadline
+	// remains distinguishable — jobCtx.Err() reports DeadlineExceeded for a
+	// timeout and Canceled for a request, and those are different outcomes.
+	outerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	jobCtx, cancelTimeout := context.WithTimeout(outerCtx, p.jobTimeout())
+	defer cancelTimeout()
+
 	if p.Canceller != nil {
 		p.Canceller.Track(jobID, cancel)
 		defer p.Canceller.Release(jobID)
@@ -94,7 +118,7 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 
 	for _, next := range steps {
 		if err := jobCtx.Err(); err != nil {
-			return p.markCancelled(job)
+			return p.endInterrupted(job, err)
 		}
 		p.emit(jobCtx, jobID, events.TypeStepStarted, map[string]any{"status": string(next)})
 		if err := job.Transition(next); err != nil {
@@ -149,7 +173,7 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 		p.emit(jobCtx, jobID, events.TypeStepCompleted, map[string]any{"status": string(next)})
 		select {
 		case <-jobCtx.Done():
-			return p.markCancelled(job)
+			return p.endInterrupted(job, jobCtx.Err())
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
@@ -159,7 +183,7 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 	// subsequent markCancelled would attempt an illegal completed->cancelled
 	// transition and return a misleading error for a job that actually finished.
 	if err := jobCtx.Err(); err != nil {
-		return p.markCancelled(job)
+		return p.endInterrupted(job, err)
 	}
 	p.emit(jobCtx, jobID, events.TypeStepStarted, map[string]any{"status": string(jobs.StatusCompleted)})
 	if err := job.Transition(jobs.StatusCompleted); err != nil {
@@ -172,6 +196,20 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 	p.emit(jobCtx, jobID, events.TypeStepCompleted, map[string]any{"status": string(jobs.StatusCompleted)})
 	p.emit(jobCtx, jobID, events.TypeJobCompleted, nil)
 	return nil
+}
+
+// endInterrupted decides how a job that stopped early should end.
+//
+// A cancellation is somebody deliberately stopping the work, and `cancelled`
+// records that faithfully. A deadline is the system failing to finish, which is
+// not the same thing and should not be reported as though a user asked for it —
+// it ends `failed`, with the deadline named so the cause is obvious from the
+// job alone.
+func (p *Processor) endInterrupted(job *jobs.Job, cause error) error {
+	if errors.Is(cause, context.DeadlineExceeded) {
+		return p.markFailed(job, fmt.Errorf("job %s exceeded its %s deadline", job.ID, p.jobTimeout()))
+	}
+	return p.markCancelled(job)
 }
 
 // markFailed drives a job to the terminal failed status and returns the

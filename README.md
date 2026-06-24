@@ -36,6 +36,10 @@ and the event-history route is not registered.
 4. If every check passes the job completes; if any fails the job ends `failed`
    with a summary. Either way the worktree and its branch are removed.
 
+Every job is bounded by `ROJO_JOB_TIMEOUT`. A job that runs out of time ends
+`failed` (not `cancelled` — that is reserved for a caller asking it to stop) and
+still has its worktree reclaimed.
+
 The planner, implementor and reviewer are scaffolded but not yet part of this
 pipeline.
 
@@ -49,6 +53,7 @@ pipeline.
 | `ROJO_WORKER_COUNT`       | `4`                         | Worker pool size                  |
 | `ROJO_WORKTREE_DIR`       | `/tmp/rojo-worktrees`       | Root dir for job worktrees        |
 | `ROJO_SHUTDOWN_TIMEOUT`   | `15s`                       | Graceful shutdown deadline        |
+| `ROJO_JOB_TIMEOUT`        | `30m`                       | Maximum wall-clock time for one job |
 | `ROJO_AUTH_TOKEN`         | *(unset → **auth disabled**)* | Bearer token required on every route except `/healthz` |
 | `ROJO_RATE_LIMIT_BURST`   | `30`                        | Token-bucket capacity per client IP |
 | `ROJO_RATE_LIMIT_RPS`     | `5`                         | Token refill per second           |

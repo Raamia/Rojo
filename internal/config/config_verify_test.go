@@ -15,6 +15,7 @@ var allConfigEnvVars = []string{
 	"ROJO_WORKER_COUNT",
 	"ROJO_WORKTREE_DIR",
 	"ROJO_SHUTDOWN_TIMEOUT",
+	"ROJO_JOB_TIMEOUT",
 	"ROJO_AUTH_TOKEN",
 	"ROJO_RATE_LIMIT_BURST",
 	"ROJO_RATE_LIMIT_RPS",
@@ -45,6 +46,7 @@ func TestLoad_Defaults(t *testing.T) {
 		WorkerCount:     4,
 		WorktreeBaseDir: "/tmp/rojo-worktrees",
 		ShutdownTimeout: 15 * time.Second,
+		JobTimeout:      30 * time.Minute,
 		AuthToken:       "",
 		RateLimitBurst:  30,
 		RateLimitRPS:    5,
@@ -66,6 +68,7 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	t.Setenv("ROJO_WORKER_COUNT", "8")
 	t.Setenv("ROJO_WORKTREE_DIR", "/var/rojo/worktrees")
 	t.Setenv("ROJO_SHUTDOWN_TIMEOUT", "30s")
+	t.Setenv("ROJO_JOB_TIMEOUT", "1m")
 	t.Setenv("ROJO_AUTH_TOKEN", "secret-token")
 	t.Setenv("ROJO_RATE_LIMIT_BURST", "100")
 	t.Setenv("ROJO_RATE_LIMIT_RPS", "12.5")
@@ -82,6 +85,7 @@ func TestLoad_EnvOverrides(t *testing.T) {
 		WorkerCount:     8,
 		WorktreeBaseDir: "/var/rojo/worktrees",
 		ShutdownTimeout: 30 * time.Second,
+		JobTimeout:      time.Minute,
 		AuthToken:       "secret-token",
 		RateLimitBurst:  100,
 		RateLimitRPS:    12.5,
@@ -126,6 +130,12 @@ func TestLoad_BadValuesFallBack(t *testing.T) {
 			check: func(c Config) (any, any) { return c.ShutdownTimeout, 15 * time.Second },
 		},
 		{
+			name:  "bad duration job timeout falls back to 30m",
+			key:   "ROJO_JOB_TIMEOUT",
+			value: "30",
+			check: func(c Config) (any, any) { return c.JobTimeout, 30 * time.Minute },
+		},
+		{
 			name:  "bad float rate limit rps falls back to 5",
 			key:   "ROJO_RATE_LIMIT_RPS",
 			value: "five",
@@ -160,6 +170,7 @@ func validConfig() Config {
 		WorkerCount:     4,
 		WorktreeBaseDir: "/tmp/rojo-worktrees",
 		ShutdownTimeout: 15 * time.Second,
+		JobTimeout:      time.Minute,
 		RateLimitBurst:  30,
 		RateLimitRPS:    5,
 	}
@@ -211,6 +222,19 @@ func TestValidate(t *testing.T) {
 		{
 			name:    "negative ShutdownTimeout",
 			mutate:  func(c *Config) { c.ShutdownTimeout = -time.Second },
+			wantErr: true,
+		},
+		{
+			// A zero job timeout would mean unbounded execution, which is the
+			// bug the setting exists to prevent — so it is rejected outright
+			// rather than treated as "no limit".
+			name:    "zero JobTimeout",
+			mutate:  func(c *Config) { c.JobTimeout = 0 },
+			wantErr: true,
+		},
+		{
+			name:    "negative JobTimeout",
+			mutate:  func(c *Config) { c.JobTimeout = -time.Minute },
 			wantErr: true,
 		},
 	}

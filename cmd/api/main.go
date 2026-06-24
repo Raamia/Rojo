@@ -70,6 +70,7 @@ func main() {
 	verifier := verification.NewAutoRunner(verifyRunner)
 
 	processor := orchestration.NewProcessor(repo, canceller, bus, workspaces, verifier)
+	processor.JobTimeout = cfg.JobTimeout
 	pool := worker.NewPool(cfg.WorkerCount, q, processor)
 	handler := api.NewJobsHandler(repo, q, canceller, bus)
 

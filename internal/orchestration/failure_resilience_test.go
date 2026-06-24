@@ -276,10 +276,11 @@ func TestResilience_InMemoryRepoMasksShutdownBugAndReachesCancelled(t *testing.T
 // FAILURE MODE 3 — no job-level timeout, no reaper
 // ---------------------------------------------------------------------------
 
-// main.go builds workerCtx with context.WithCancel(context.Background()) — no
-// deadline — and Process derives jobCtx from it with WithCancel, not
-// WithTimeout. Nothing in the pipeline bounds a job's total runtime.
-func TestResilience_NoJobLevelDeadlineIsEverSet(t *testing.T) {
+// FIXED: Process now derives its job context with context.WithTimeout, so every
+// job carries a deadline. Without one a wedged step (a hung go test, a
+// deadlocked build) occupied its worker slot indefinitely; with the default
+// four workers, four such jobs stalled the service entirely.
+func TestResilience_JobContextCarriesADeadline(t *testing.T) {
 	inner := jobs.NewInMemoryRepository()
 	resNewJob(t, inner, "job-deadline-probe")
 
@@ -311,8 +312,8 @@ func TestResilience_NoJobLevelDeadlineIsEverSet(t *testing.T) {
 	if !probed {
 		t.Fatal("repository was never called; probe did not run")
 	}
-	if sawDeadline {
-		t.Fatal("job context now HAS a deadline — a timeout was added, re-baseline this test")
+	if !sawDeadline {
+		t.Fatal("job context has no deadline — a wedged step would hold its worker slot forever")
 	}
 }
 
