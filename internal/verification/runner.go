@@ -31,6 +31,18 @@ type Check struct {
 	// unformatted file and exits 0, so judging it by exit code alone would let
 	// all formatting violations pass.
 	FailOnOutput bool
+
+	// AllowExit maps non-zero exit codes that do not mean failure to the note
+	// explaining them. pytest is the motivating case: it exits 5 when no tests
+	// were collected, which is "there was nothing to check", not "the checks
+	// failed" — treating it as failure would fail every testless Python repo.
+	AllowExit map[int]string
+
+	// NoteWhen inspects a passing check's output and returns a caveat, or "".
+	// It lets a preset flag things like `go test` passing because there were
+	// no test files: exit 0, technically green, but "verified" then means
+	// only "compiled", and the record should say so.
+	NoteWhen func(output string) string
 }
 
 // DefaultChecks is the Go gate: formatting, static analysis, tests.
@@ -41,8 +53,24 @@ func DefaultChecks() []Check {
 	return []Check{
 		{Name: "gofmt", Command: "gofmt", Args: []string{"-l", "."}, FailOnOutput: true},
 		{Name: "go vet", Command: "go", Args: []string{"vet", "./..."}},
-		{Name: "go test", Command: "go", Args: []string{"test", "./..."}},
+		{Name: "go test", Command: "go", Args: []string{"test", "./..."}, NoteWhen: goTestNote},
 	}
+}
+
+// goTestNote flags the pass that means less than it looks like it means:
+// `go test ./...` exits 0 for a module with no test files at all, so the gate
+// proved compilation and nothing else. The reviewer and the user both need
+// that distinction — "verified" and "compiled" are different claims.
+func goTestNote(output string) string {
+	if !strings.Contains(output, "[no test files]") {
+		return ""
+	}
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, "ok") {
+			return "" // at least one package genuinely ran tests
+		}
+	}
+	return "no test files found: the gate proves compilation only"
 }
 
 // Runner executes checks in a directory and reports the outcome.
@@ -79,14 +107,15 @@ func (v *Runner) Verify(ctx context.Context, dir string) (Report, error) {
 		if err := ctx.Err(); err != nil {
 			return report, fmt.Errorf("verification cancelled after %d checks: %w", len(report.Results), err)
 		}
-		report.Results = append(report.Results, v.runCheck(ctx, dir, c))
+		report.Results = append(report.Results, runCheck(ctx, v.runner, dir, c))
 	}
 	return report, nil
 }
 
-func (v *Runner) runCheck(ctx context.Context, dir string, c Check) Result {
+// runCheck is shared by Runner (fixed checks) and AutoRunner (detected checks).
+func runCheck(ctx context.Context, runner execution.CommandRunner, dir string, c Check) Result {
 	start := time.Now()
-	res, err := v.runner.Run(ctx, dir, c.Command, c.Args...)
+	res, err := runner.Run(ctx, dir, c.Command, c.Args...)
 
 	result := Result{
 		Check:    c.Name,
@@ -103,11 +132,19 @@ func (v *Runner) runCheck(ctx context.Context, dir string, c Check) Result {
 		result.Passed = false
 		result.Output = truncate(joinNonEmpty(result.Output, err.Error()))
 	case res.ExitCode != 0:
-		result.Passed = false
+		if note, tolerated := c.AllowExit[res.ExitCode]; tolerated {
+			result.Passed = true
+			result.Note = note
+		} else {
+			result.Passed = false
+		}
 	case c.FailOnOutput && strings.TrimSpace(res.Stdout) != "":
 		result.Passed = false
 	default:
 		result.Passed = true
+	}
+	if result.Passed && result.Note == "" && c.NoteWhen != nil {
+		result.Note = c.NoteWhen(result.Output)
 	}
 	return result
 }

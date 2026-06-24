@@ -55,15 +55,19 @@ func main() {
 	)
 	workspaces := workspace.NewGitWorkspaceManager(gitRunner, cfg.WorktreeBaseDir)
 	logger.Info("worktree base dir", "path", cfg.WorktreeBaseDir)
+	logger.Info("verification detects the repo's stack", "commands", verification.AutoCommands())
 
-	// Verification gets its own runner and allowlist: it may invoke the Go
-	// toolchain, never git, and vice versa.
+	// Verification gets its own runner and allowlist: it may invoke test
+	// toolchains, never git, and vice versa. The allowlist is exactly the set
+	// of commands detection can choose from — the repository under test picks
+	// which preset applies (by containing go.mod, package.json, ...) but can
+	// never name a command.
 	verifyRunner := execution.NewSafeRunner(
 		execution.NewExecRunner(),
-		execution.NewAllowlist("go", "gofmt"),
+		execution.NewAllowlist(verification.AutoCommands()...),
 		10*time.Minute,
 	)
-	verifier := verification.NewRunner(verifyRunner)
+	verifier := verification.NewAutoRunner(verifyRunner)
 
 	processor := orchestration.NewProcessor(repo, canceller, bus, workspaces, verifier)
 	pool := worker.NewPool(cfg.WorkerCount, q, processor)
