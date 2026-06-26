@@ -77,6 +77,27 @@ func main() {
 	workerCtx, cancelWorkers := context.WithCancel(context.Background())
 	pool.Start(workerCtx)
 
+	// Reconcile persisted state with the empty in-process queue before the
+	// server accepts anything new, so recovered work is not competing with
+	// fresh submissions for queue slots.
+	recoverer := &orchestration.Recoverer{
+		Repo:            repo,
+		Queue:           q,
+		Bus:             bus,
+		Workspaces:      workspaces,
+		WorktreeBaseDir: cfg.WorktreeBaseDir,
+		Logger:          logger,
+	}
+	if report, err := recoverer.Recover(context.Background()); err != nil {
+		logger.Error("job recovery failed; starting anyway", "err", err)
+	} else if !report.IsZero() {
+		logger.Info("recovered jobs from a previous run",
+			"requeued", report.Requeued,
+			"failed_interrupted", report.FailedInterrupted,
+			"worktrees_reclaimed", report.WorktreesReclaimed,
+			"still_queued", report.Unqueueable)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		api.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})

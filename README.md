@@ -36,6 +36,12 @@ and the event-history route is not registered.
 4. If every check passes the job completes; if any fails the job ends `failed`
    with a summary. Either way the worktree and its branch are removed.
 
+On startup Rojo reconciles the database with its empty queue: jobs still marked
+`queued` are re-enqueued, and jobs interrupted mid-flight by the previous
+process are marked `failed` and have their worktrees reclaimed. With
+`ROJO_DB_URL` unset there is nothing to recover, since the in-memory repository
+dies with the process.
+
 Every job is bounded by `ROJO_JOB_TIMEOUT`. A job that runs out of time ends
 `failed` (not `cancelled` — that is reserved for a caller asking it to stop) and
 still has its worktree reclaimed.

@@ -22,6 +22,21 @@ type Workspace struct {
 	RepoPath string
 }
 
+// Reconstruct returns the Workspace a run would have created for this job.
+//
+// Both the path and the branch derive from the job ID alone, which is what
+// makes crash recovery possible without a schema: a process that died
+// mid-job persisted nothing about its worktree, but a later run can still
+// name it exactly and reclaim it.
+func Reconstruct(baseDir, jobID, repoPath string) *Workspace {
+	return &Workspace{
+		JobID:    jobID,
+		Branch:   branchPrefix + jobID,
+		Path:     filepath.Join(baseDir, jobID),
+		RepoPath: repoPath,
+	}
+}
+
 type WorkspaceManager interface {
 	Create(ctx context.Context, jobID, repoPath string) (*Workspace, error)
 	Cleanup(ctx context.Context, ws *Workspace) error
