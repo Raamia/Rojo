@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -154,7 +155,17 @@ func TestRecover_ReclaimsWorktreesOfInterruptedJobs(t *testing.T) {
 	seedJob(t, repo, "crashed", jobs.StatusImplementing)
 	ws := &fakeWorkspaces{}
 
-	report, err := newRecoverer(repo, &recQueue{}, ws).Recover(context.Background())
+	// The crashed run left a worktree on disk. Recovery only touches paths that
+	// actually exist, so asking git to remove worktrees that were never created
+	// produces no noise.
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "crashed"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := newRecoverer(repo, &recQueue{}, ws)
+	rec.WorktreeBaseDir = base
+	report, err := rec.Recover(context.Background())
 	if err != nil {
 		t.Fatalf("recover: %v", err)
 	}
@@ -220,6 +231,9 @@ func TestRecover_MixedStateDatabase(t *testing.T) {
 	}
 	if report.FailedInterrupted != 1 {
 		t.Errorf("failed %d, want 1", report.FailedInterrupted)
+	}
+	if report.WorktreesReclaimed != 0 {
+		t.Errorf("reclaimed %d worktrees, want 0 — none exist on disk", report.WorktreesReclaimed)
 	}
 	if got, _ := repo.Get(context.Background(), "done"); got.Status != jobs.StatusCompleted {
 		t.Errorf("completed job became %q", got.Status)

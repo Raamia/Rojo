@@ -71,6 +71,10 @@ func main() {
 
 	processor := orchestration.NewProcessor(repo, canceller, bus, workspaces, verifier)
 	processor.JobTimeout = cfg.JobTimeout
+	processor.Variants = cfg.FanoutVariants
+	if cfg.FanoutVariants > 1 {
+		logger.Info("fan-out enabled", "variants", cfg.FanoutVariants)
+	}
 	pool := worker.NewPool(cfg.WorkerCount, q, processor)
 	handler := api.NewJobsHandler(repo, q, canceller, bus)
 

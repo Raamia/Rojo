@@ -16,6 +16,7 @@ var allConfigEnvVars = []string{
 	"ROJO_WORKTREE_DIR",
 	"ROJO_SHUTDOWN_TIMEOUT",
 	"ROJO_JOB_TIMEOUT",
+	"ROJO_FANOUT_VARIANTS",
 	"ROJO_AUTH_TOKEN",
 	"ROJO_RATE_LIMIT_BURST",
 	"ROJO_RATE_LIMIT_RPS",
@@ -47,6 +48,7 @@ func TestLoad_Defaults(t *testing.T) {
 		WorktreeBaseDir: "/tmp/rojo-worktrees",
 		ShutdownTimeout: 15 * time.Second,
 		JobTimeout:      30 * time.Minute,
+		FanoutVariants:  1,
 		AuthToken:       "",
 		RateLimitBurst:  30,
 		RateLimitRPS:    5,
@@ -69,6 +71,7 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	t.Setenv("ROJO_WORKTREE_DIR", "/var/rojo/worktrees")
 	t.Setenv("ROJO_SHUTDOWN_TIMEOUT", "30s")
 	t.Setenv("ROJO_JOB_TIMEOUT", "1m")
+	t.Setenv("ROJO_FANOUT_VARIANTS", "3")
 	t.Setenv("ROJO_AUTH_TOKEN", "secret-token")
 	t.Setenv("ROJO_RATE_LIMIT_BURST", "100")
 	t.Setenv("ROJO_RATE_LIMIT_RPS", "12.5")
@@ -86,6 +89,7 @@ func TestLoad_EnvOverrides(t *testing.T) {
 		WorktreeBaseDir: "/var/rojo/worktrees",
 		ShutdownTimeout: 30 * time.Second,
 		JobTimeout:      time.Minute,
+		FanoutVariants:  3,
 		AuthToken:       "secret-token",
 		RateLimitBurst:  100,
 		RateLimitRPS:    12.5,
@@ -171,6 +175,7 @@ func validConfig() Config {
 		WorktreeBaseDir: "/tmp/rojo-worktrees",
 		ShutdownTimeout: 15 * time.Second,
 		JobTimeout:      time.Minute,
+		FanoutVariants:  1,
 		RateLimitBurst:  30,
 		RateLimitRPS:    5,
 	}
@@ -235,6 +240,11 @@ func TestValidate(t *testing.T) {
 		{
 			name:    "negative JobTimeout",
 			mutate:  func(c *Config) { c.JobTimeout = -time.Minute },
+			wantErr: true,
+		},
+		{
+			name:    "zero FanoutVariants",
+			mutate:  func(c *Config) { c.FanoutVariants = 0 },
 			wantErr: true,
 		},
 	}

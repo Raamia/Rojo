@@ -42,6 +42,11 @@ process are marked `failed` and have their worktrees reclaimed. With
 `ROJO_DB_URL` unset there is nothing to recover, since the in-memory repository
 dies with the process.
 
+Set `ROJO_FANOUT_VARIANTS` above 1 to attempt each job several ways at once:
+every variant gets its own worktree, all are verified concurrently, and the
+first that passes every check wins. Today the variants do identical work — the
+value arrives once an agent produces genuinely different candidates.
+
 Every job is bounded by `ROJO_JOB_TIMEOUT`. A job that runs out of time ends
 `failed` (not `cancelled` — that is reserved for a caller asking it to stop) and
 still has its worktree reclaimed.
@@ -60,6 +65,7 @@ pipeline.
 | `ROJO_WORKTREE_DIR`       | `/tmp/rojo-worktrees`       | Root dir for job worktrees        |
 | `ROJO_SHUTDOWN_TIMEOUT`   | `15s`                       | Graceful shutdown deadline        |
 | `ROJO_JOB_TIMEOUT`        | `30m`                       | Maximum wall-clock time for one job |
+| `ROJO_FANOUT_VARIANTS`    | `1`                         | Attempts per job, each in its own worktree (max 8) |
 | `ROJO_AUTH_TOKEN`         | *(unset → **auth disabled**)* | Bearer token required on every route except `/healthz` |
 | `ROJO_RATE_LIMIT_BURST`   | `30`                        | Token-bucket capacity per client IP |
 | `ROJO_RATE_LIMIT_RPS`     | `5`                         | Token refill per second           |

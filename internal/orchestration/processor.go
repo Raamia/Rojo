@@ -30,6 +30,10 @@ type Processor struct {
 	// Verifier is optional and only runs when a workspace exists — there is
 	// nothing meaningful to check without a checkout.
 	Verifier Verifier
+	// Variants is how many independent attempts each job gets. 1 (the default)
+	// runs a job once. Higher values fan the job out across that many isolated
+	// checkouts, verify them all, and keep the first that passes.
+	Variants int
 	// JobTimeout bounds one job's total execution. A zero value falls back to
 	// DefaultJobTimeout rather than meaning "unlimited": a job that can run
 	// forever holds its worker slot forever, and with the default four workers
@@ -89,13 +93,19 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 	// Cleanup is handed jobCtx even though it is often already cancelled here;
 	// it deliberately strips cancellation internally so that a cancelled job
 	// still gets cleaned up.
-	var ws *workspace.Workspace
+	var cands []*candidate
 	defer func() {
-		if p.Workspaces == nil || ws == nil {
+		if p.Workspaces == nil {
 			return
 		}
-		if err := p.Workspaces.Cleanup(jobCtx, ws); err != nil {
-			log.Error("cleanup workspace", "path", ws.Path, "branch", ws.Branch, "err", err)
+		for _, c := range cands {
+			if c.ws == nil {
+				continue
+			}
+			if err := p.Workspaces.Cleanup(jobCtx, c.ws); err != nil {
+				log.Error("cleanup workspace", "variant", c.index,
+					"path", c.ws.Path, "branch", c.ws.Branch, "err", err)
+			}
 		}
 	}()
 
@@ -133,40 +143,62 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 		// write. Today only preparing_workspace does anything; the planner,
 		// implementor, verifier and reviewer slot in beside it.
 		if next == jobs.StatusPreparingWorkspace && p.Workspaces != nil {
-			created, wsErr := p.Workspaces.Create(jobCtx, jobID, job.RepoPath)
+			total := variantCount(p.Variants)
+			created, wsErr := p.createCandidates(jobCtx, jobID, job.RepoPath, total)
+			cands = created // assign even on failure so the defer cleans up partial work
 			if wsErr != nil {
-				return p.markFailed(job, fmt.Errorf("create workspace for job %s: %w", jobID, wsErr))
+				return p.markFailed(job, fmt.Errorf("prepare workspaces for job %s: %w", jobID, wsErr))
 			}
-			ws = created
-			log.Info("workspace created", "path", ws.Path, "branch", ws.Branch)
-			p.emit(jobCtx, jobID, events.TypeWorkspaceCreated, map[string]any{
-				"path":   ws.Path,
-				"branch": ws.Branch,
-			})
+			for _, c := range cands {
+				log.Info("workspace created", "variant", c.index, "path", c.ws.Path, "branch", c.ws.Branch)
+				p.emit(jobCtx, jobID, events.TypeWorkspaceCreated, map[string]any{
+					"variant": c.index,
+					"path":    c.ws.Path,
+					"branch":  c.ws.Branch,
+				})
+			}
 		}
 
-		if next == jobs.StatusVerifying && p.Verifier != nil && ws != nil {
-			report, vErr := p.Verifier.Verify(jobCtx, ws.Path)
-			if vErr != nil {
-				return p.markFailed(job, fmt.Errorf("run verification for job %s: %w", jobID, vErr))
+		if next == jobs.StatusVerifying && p.Verifier != nil && len(cands) > 0 {
+			// Every attempt is checked, concurrently: the checks are the slow
+			// part and the attempts are independent, so one failing must not
+			// stop the others from being judged.
+			p.verifyCandidates(jobCtx, cands)
+
+			for _, c := range cands {
+				// Emitting each report persists it: PersistingBus writes event
+				// payloads to the events table, so results survive without a
+				// dedicated schema.
+				payload := map[string]any{
+					"variant": c.index,
+					"passed":  c.passed(),
+					"summary": c.report.Summary(),
+					"results": c.report.Results,
+				}
+				if c.err != nil {
+					payload["error"] = c.err.Error()
+				}
+				p.emit(jobCtx, jobID, events.TypeVerificationCompleted, payload)
 			}
 
-			// Emitting the report persists it: PersistingBus writes event
-			// payloads to the events table, so the results survive without a
-			// dedicated schema.
-			p.emit(jobCtx, jobID, events.TypeVerificationCompleted, map[string]any{
-				"passed":  report.AllPassed(),
-				"summary": report.Summary(),
-				"results": report.Results,
-			})
-			log.Info("verification complete", "passed", report.AllPassed(), "summary", report.Summary())
+			winner, ok := selectWinner(cands)
+			summary := summarise(cands, winner)
+			if len(cands) > 1 {
+				p.emit(jobCtx, jobID, events.TypeFanoutCompleted, map[string]any{
+					"total": summary.Total, "passed": summary.Passed,
+					"winner": summary.Winner, "results": summary.Results,
+				})
+				log.Info("fan-out complete", "total", summary.Total,
+					"passed", summary.Passed, "winner", summary.Winner)
+			}
 
-			// Deterministic checks outrank everything downstream: a job whose
-			// gate failed must not reach completed. Once the reviewer exists
+			// Deterministic checks outrank everything downstream: a job with no
+			// passing attempt must not reach completed. Once the reviewer exists
 			// this becomes a revision cycle rather than a terminal failure.
-			if !report.AllPassed() {
-				return p.markFailed(job, fmt.Errorf("verification failed: %s", report.Summary()))
+			if !ok {
+				return p.markFailed(job, fanoutFailure(cands, summary))
 			}
+			log.Info("verification complete", "winner", winner.index, "summary", winner.report.Summary())
 		}
 
 		log.Info("step complete", "status", next)

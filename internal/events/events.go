@@ -24,6 +24,7 @@ const (
 
 	TypeWorkspaceCreated      = "workspace.created"
 	TypeVerificationCompleted = "verification.completed"
+	TypeFanoutCompleted       = "fanout.completed"
 )
 
 type Subscription struct {

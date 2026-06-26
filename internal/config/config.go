@@ -17,6 +17,7 @@ type Config struct {
 	WorktreeBaseDir string
 	ShutdownTimeout time.Duration
 	JobTimeout      time.Duration
+	FanoutVariants  int
 	AuthToken       string
 	RateLimitBurst  int
 	RateLimitRPS    float64
@@ -31,6 +32,7 @@ func Load() (Config, error) {
 		WorktreeBaseDir: getEnv("ROJO_WORKTREE_DIR", "/tmp/rojo-worktrees"),
 		ShutdownTimeout: getEnvDuration("ROJO_SHUTDOWN_TIMEOUT", 15*time.Second),
 		JobTimeout:      getEnvDuration("ROJO_JOB_TIMEOUT", 30*time.Minute),
+		FanoutVariants:  getEnvInt("ROJO_FANOUT_VARIANTS", 1),
 		AuthToken:       os.Getenv("ROJO_AUTH_TOKEN"),
 		RateLimitBurst:  getEnvInt("ROJO_RATE_LIMIT_BURST", 30),
 		RateLimitRPS:    getEnvFloat("ROJO_RATE_LIMIT_RPS", 5),
@@ -87,6 +89,9 @@ func (c Config) Validate() error {
 	}
 	if c.JobTimeout <= 0 {
 		return fmt.Errorf("ROJO_JOB_TIMEOUT must be positive, got %s", c.JobTimeout)
+	}
+	if c.FanoutVariants < 1 {
+		return fmt.Errorf("ROJO_FANOUT_VARIANTS must be at least 1, got %d", c.FanoutVariants)
 	}
 	return nil
 }

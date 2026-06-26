@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/Raamia/Rojo/internal/events"
 	"github.com/Raamia/Rojo/internal/jobs"
@@ -132,13 +133,30 @@ func (r *Recoverer) reclaimWorktree(ctx context.Context, job *jobs.Job) bool {
 	if r.Workspaces == nil || r.WorktreeBaseDir == "" || job.RepoPath == "" {
 		return false
 	}
-	ws := workspace.Reconstruct(r.WorktreeBaseDir, job.ID, job.RepoPath)
-	if err := r.Workspaces.Cleanup(ctx, ws); err != nil {
-		r.logger().Warn("reclaim worktree for interrupted job",
-			"job_id", job.ID, "path", ws.Path, "err", err)
-		return false
+
+	// A fanned-out job has one worktree per variant, named with a deterministic
+	// suffix, so every possible name is checked. Only paths that actually exist
+	// are handed to Cleanup — asking git to remove a worktree that was never
+	// created just produces noise.
+	ids := []string{job.ID}
+	for i := 0; i < MaxVariants; i++ {
+		ids = append(ids, variantID(job.ID, i, MaxVariants))
 	}
-	return true
+
+	var reclaimed bool
+	for _, id := range ids {
+		ws := workspace.Reconstruct(r.WorktreeBaseDir, id, job.RepoPath)
+		if _, err := os.Stat(ws.Path); err != nil {
+			continue
+		}
+		if err := r.Workspaces.Cleanup(ctx, ws); err != nil {
+			r.logger().Warn("reclaim worktree for interrupted job",
+				"job_id", job.ID, "path", ws.Path, "err", err)
+			continue
+		}
+		reclaimed = true
+	}
+	return reclaimed
 }
 
 func (r *Recoverer) failInterrupted(ctx context.Context, job *jobs.Job) error {
