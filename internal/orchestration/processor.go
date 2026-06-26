@@ -52,8 +52,17 @@ func (p *Processor) jobTimeout() time.Duration {
 	return p.JobTimeout
 }
 
-func NewProcessor(repo jobs.JobRepository, c *Canceller, bus events.Bus, ws workspace.WorkspaceManager, v Verifier) *Processor {
-	return &Processor{Repo: repo, Canceller: c, Bus: bus, Workspaces: ws, Verifier: v}
+// NewProcessor builds a processor from the three collaborators it cannot work
+// without. The pipeline stages — Workspaces, Verifier, and the planner,
+// implementor and reviewer still to come — are set as fields afterwards.
+//
+// They are fields rather than parameters because they are genuinely optional
+// (a processor with none of them is a working state machine, which is what the
+// transition tests exercise) and because the list only grows: threading each
+// new stage through a constructor meant editing every call site in the suite
+// for a dependency most of those tests do not use.
+func NewProcessor(repo jobs.JobRepository, c *Canceller, bus events.Bus) *Processor {
+	return &Processor{Repo: repo, Canceller: c, Bus: bus}
 }
 
 func (p *Processor) emit(ctx context.Context, jobID, eventType string, payload map[string]any) {

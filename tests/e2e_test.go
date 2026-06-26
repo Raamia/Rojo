@@ -45,7 +45,7 @@ func TestEndToEnd_JobFlowsThroughStates(t *testing.T) {
 	repo := jobs.NewInMemoryRepository()
 	q := queue.New(4)
 	canceller := orchestration.NewCanceller()
-	processor := orchestration.NewProcessor(repo, canceller, nil, nil, nil)
+	processor := orchestration.NewProcessor(repo, canceller, nil)
 
 	pool := worker.NewPool(1, q, processor)
 	ctx, cancel := context.WithCancel(context.Background())

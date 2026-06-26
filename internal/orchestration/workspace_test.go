@@ -88,7 +88,8 @@ func TestProcessor_CreatesAndCleansUpWorkspaceOnSuccess(t *testing.T) {
 	fake := &fakeWorkspaces{}
 	newQueuedJob(t, repo, "ws-job")
 
-	p := NewProcessor(repo, NewCanceller(), bus, fake, nil)
+	p := NewProcessor(repo, NewCanceller(), bus)
+	p.Workspaces = fake
 	if err := p.Process(context.Background(), "ws-job"); err != nil {
 		t.Fatalf("process: %v", err)
 	}
@@ -127,7 +128,8 @@ func TestProcessor_CleansUpWorkspaceOnCancellation(t *testing.T) {
 	fake.afterCreate = func() { _ = canc.Cancel("cancel-ws") }
 	newQueuedJob(t, repo, "cancel-ws")
 
-	p := NewProcessor(repo, canc, events.NewInProcessBus(), fake, nil)
+	p := NewProcessor(repo, canc, events.NewInProcessBus())
+	p.Workspaces = fake
 
 	done := make(chan error, 1)
 	go func() { done <- p.Process(context.Background(), "cancel-ws") }()
@@ -167,7 +169,8 @@ func TestProcessor_CleanupIsAttemptedEvenWhenContextIsDead(t *testing.T) {
 	fake.afterCreate = func() { _ = canc.Cancel("dead-ctx") }
 	newQueuedJob(t, repo, "dead-ctx")
 
-	p := NewProcessor(repo, canc, events.NewInProcessBus(), fake, nil)
+	p := NewProcessor(repo, canc, events.NewInProcessBus())
+	p.Workspaces = fake
 
 	done := make(chan error, 1)
 	go func() { done <- p.Process(context.Background(), "dead-ctx") }()
@@ -202,7 +205,8 @@ func TestProcessor_WorkspaceCreateFailureMarksJobFailed(t *testing.T) {
 	fake := &fakeWorkspaces{createErr: boom}
 	newQueuedJob(t, repo, "bad-repo")
 
-	p := NewProcessor(repo, NewCanceller(), bus, fake, nil)
+	p := NewProcessor(repo, NewCanceller(), bus)
+	p.Workspaces = fake
 	err := p.Process(context.Background(), "bad-repo")
 	if err == nil {
 		t.Fatal("expected an error when the workspace cannot be created")
@@ -235,7 +239,7 @@ func TestProcessor_NilWorkspaceManagerStillCompletes(t *testing.T) {
 	repo := jobs.NewInMemoryRepository()
 	newQueuedJob(t, repo, "no-ws")
 
-	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), nil, nil)
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
 	if err := p.Process(context.Background(), "no-ws"); err != nil {
 		t.Fatalf("process: %v", err)
 	}
@@ -296,7 +300,8 @@ func TestProcessor_RealGitWorktreeLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), observer, nil)
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
+	p.Workspaces = observer
 	if err := p.Process(context.Background(), "real-git"); err != nil {
 		t.Fatalf("process: %v", err)
 	}

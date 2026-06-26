@@ -139,7 +139,9 @@ func TestProcessor_FanoutCreatesOneWorkspacePerVariant(t *testing.T) {
 	v := &perDirVerifier{passing: map[string]bool{"fan-v0": true, "fan-v1": true, "fan-v2": true}}
 	newQueuedJob(t, repo, "fan")
 
-	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), ws, v)
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
+	p.Workspaces = ws
+	p.Verifier = v
 	p.Variants = 3
 	if err := p.Process(context.Background(), "fan"); err != nil {
 		t.Fatalf("process: %v", err)
@@ -172,7 +174,9 @@ func TestProcessor_VariantsAreVerifiedConcurrently(t *testing.T) {
 	}
 	newQueuedJob(t, repo, "conc")
 
-	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), ws, v)
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
+	p.Workspaces = ws
+	p.Verifier = v
 	p.Variants = 4
 
 	start := time.Now()
@@ -225,7 +229,9 @@ func TestProcessor_JobSucceedsIfAnyVariantPasses(t *testing.T) {
 	v := &perDirVerifier{passing: map[string]bool{"mixed-v2": true}} // only the third passes
 	newQueuedJob(t, repo, "mixed")
 
-	p := NewProcessor(repo, NewCanceller(), bus, ws, v)
+	p := NewProcessor(repo, NewCanceller(), bus)
+	p.Workspaces = ws
+	p.Verifier = v
 	p.Variants = 3
 	if err := p.Process(context.Background(), "mixed"); err != nil {
 		t.Fatalf("process: %v", err)
@@ -252,7 +258,9 @@ func TestProcessor_JobFailsWhenNoVariantPasses(t *testing.T) {
 	v := &perDirVerifier{passing: map[string]bool{}}
 	newQueuedJob(t, repo, "allbad")
 
-	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), ws, v)
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
+	p.Workspaces = ws
+	p.Verifier = v
 	p.Variants = 3
 	err := p.Process(context.Background(), "allbad")
 	if err == nil {
@@ -278,7 +286,9 @@ func TestProcessor_OneVariantErroringDoesNotStopTheRest(t *testing.T) {
 	}
 	newQueuedJob(t, repo, "partial")
 
-	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), ws, v)
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
+	p.Workspaces = ws
+	p.Verifier = v
 	p.Variants = 2
 	if err := p.Process(context.Background(), "partial"); err != nil {
 		t.Fatalf("process: %v", err)
@@ -297,7 +307,9 @@ func TestProcessor_PartialWorkspaceFailureStillCleansUp(t *testing.T) {
 	ws.failWith = errors.New("disk full")
 	newQueuedJob(t, repo, "partial-ws")
 
-	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), ws, &perDirVerifier{})
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
+	p.Workspaces = ws
+	p.Verifier = &perDirVerifier{}
 	p.Variants = 4
 	if err := p.Process(context.Background(), "partial-ws"); err == nil {
 		t.Fatal("expected an error when a workspace cannot be created")
@@ -327,7 +339,9 @@ func TestProcessor_DefaultIsASingleVariant(t *testing.T) {
 	v := &perDirVerifier{passing: map[string]bool{"single": true}}
 	newQueuedJob(t, repo, "single")
 
-	p := NewProcessor(repo, NewCanceller(), bus, ws, v) // Variants left at 0
+	p := NewProcessor(repo, NewCanceller(), bus) // Variants left at 0
+	p.Workspaces = ws
+	p.Verifier = v
 	if err := p.Process(context.Background(), "single"); err != nil {
 		t.Fatalf("process: %v", err)
 	}
@@ -388,7 +402,9 @@ func TestProcessor_FanoutRealGitAndToolchain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), manager, verifier)
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
+	p.Workspaces = manager
+	p.Verifier = verifier
 	p.Variants = 3
 	if err := p.Process(context.Background(), "real-fanout"); err != nil {
 		t.Fatalf("process: %v", err)

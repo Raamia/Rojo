@@ -178,7 +178,7 @@ func TestResilience_ShutdownWithCancelledCtxLeavesJobStuckInQueued(t *testing.T)
 	repo := &resCtxRepo{inner: inner}
 	resNewJob(t, inner, "job-shutdown-get")
 
-	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), nil, nil)
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // simulate cancelWorkers() firing before this job starts
@@ -225,7 +225,7 @@ func TestResilience_CancelDuringPersistLeavesJobInNonTerminalStatus(t *testing.T
 		},
 	}
 
-	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), nil, nil)
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
 	err := p.Process(ctx, "job-persist-cancel")
 	if err == nil {
 		t.Fatal("Process returned nil, want a persist failure")
@@ -255,7 +255,7 @@ func TestResilience_InMemoryRepoMasksShutdownBugAndReachesCancelled(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), nil, nil)
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
 	done := make(chan error, 1)
 	go func() { done <- p.Process(ctx, "job-inmem-cancel") }()
 
@@ -302,7 +302,7 @@ func TestResilience_JobContextCarriesADeadline(t *testing.T) {
 		},
 	}
 
-	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), nil, nil)
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
 	if err := p.Process(context.Background(), "job-deadline-probe"); err != nil {
 		t.Fatalf("Process: %v", err)
 	}
@@ -350,7 +350,7 @@ func TestResilience_HungStepBlocksWorkerForeverInNonTerminalStatus(t *testing.T)
 		},
 	}
 
-	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), nil, nil)
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
 	done := make(chan error, 1)
 	go func() { done <- p.Process(context.Background(), "job-hang") }()
 
@@ -402,7 +402,7 @@ func TestResilience_RepoFailureMidPipelineLeavesJobStuckAndNeverMarksFailed(t *t
 	sub := bus.Subscribe("job-db-down", 256)
 	defer bus.Unsubscribe(sub)
 
-	p := NewProcessor(repo, NewCanceller(), bus, nil, nil)
+	p := NewProcessor(repo, NewCanceller(), bus)
 	err := p.Process(context.Background(), "job-db-down")
 	if err == nil {
 		t.Fatal("Process returned nil, want the repository error")
@@ -469,7 +469,7 @@ func TestResilience_SameJobIDRunsTwiceConcurrentlyWithNoLease(t *testing.T) {
 	wg.Add(2)
 	defer wg.Wait()
 
-	p := NewProcessor(repo, NewCanceller(), bus, nil, nil)
+	p := NewProcessor(repo, NewCanceller(), bus)
 
 	errs := make(chan error, 2)
 	for i := 0; i < 2; i++ {
@@ -562,7 +562,7 @@ func TestResilience_EventStoreFailureSilentlyDropsEveryEventAndStream(t *testing
 	sub := bus.Subscribe("job-events-down", 256)
 	defer bus.Unsubscribe(sub)
 
-	p := NewProcessor(repo, NewCanceller(), bus, nil, nil)
+	p := NewProcessor(repo, NewCanceller(), bus)
 	if err := p.Process(context.Background(), "job-events-down"); err != nil {
 		t.Fatalf("Process returned %v, want nil — event failures do not fail the job", err)
 	}

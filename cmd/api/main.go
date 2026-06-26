@@ -69,7 +69,9 @@ func main() {
 	)
 	verifier := verification.NewAutoRunner(verifyRunner)
 
-	processor := orchestration.NewProcessor(repo, canceller, bus, workspaces, verifier)
+	processor := orchestration.NewProcessor(repo, canceller, bus)
+	processor.Workspaces = workspaces
+	processor.Verifier = verifier
 	processor.JobTimeout = cfg.JobTimeout
 	processor.Variants = cfg.FanoutVariants
 	if cfg.FanoutVariants > 1 {

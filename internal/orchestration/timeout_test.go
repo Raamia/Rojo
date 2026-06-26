@@ -32,7 +32,9 @@ func TestProcessor_WedgedStepIsCutOffByTheJobTimeout(t *testing.T) {
 	defer bus.Unsubscribe(sub)
 
 	newQueuedJob(t, repo, "wedged")
-	p := NewProcessor(repo, NewCanceller(), bus, &fakeWorkspaces{}, &blockingVerifier{})
+	p := NewProcessor(repo, NewCanceller(), bus)
+	p.Workspaces = &fakeWorkspaces{}
+	p.Verifier = &blockingVerifier{}
 	p.JobTimeout = 250 * time.Millisecond
 
 	done := make(chan error, 1)
@@ -64,7 +66,9 @@ func TestProcessor_TimeoutFailsWhileCancellationCancels(t *testing.T) {
 	t.Run("timeout ends failed", func(t *testing.T) {
 		repo := jobs.NewInMemoryRepository()
 		newQueuedJob(t, repo, "t-out")
-		p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), &fakeWorkspaces{}, &blockingVerifier{})
+		p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
+		p.Workspaces = &fakeWorkspaces{}
+		p.Verifier = &blockingVerifier{}
 		p.JobTimeout = 150 * time.Millisecond
 
 		err := p.Process(context.Background(), "t-out")
@@ -87,7 +91,8 @@ func TestProcessor_TimeoutFailsWhileCancellationCancels(t *testing.T) {
 		fake.afterCreate = func() { _ = canc.Cancel("t-cancel") }
 		newQueuedJob(t, repo, "t-cancel")
 
-		p := NewProcessor(repo, canc, events.NewInProcessBus(), fake, nil)
+		p := NewProcessor(repo, canc, events.NewInProcessBus())
+		p.Workspaces = fake
 		p.JobTimeout = time.Minute // generous, so only the cancel can end it
 
 		done := make(chan error, 1)
@@ -111,7 +116,9 @@ func TestProcessor_TimeoutStillCleansUpTheWorkspace(t *testing.T) {
 	fake := &fakeWorkspaces{}
 	newQueuedJob(t, repo, "timeout-cleanup")
 
-	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), fake, &blockingVerifier{})
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
+	p.Workspaces = fake
+	p.Verifier = &blockingVerifier{}
 	p.JobTimeout = 150 * time.Millisecond
 
 	_ = p.Process(context.Background(), "timeout-cleanup")
@@ -146,7 +153,7 @@ func TestProcessor_GenerousTimeoutDoesNotDisturbNormalJobs(t *testing.T) {
 	repo := jobs.NewInMemoryRepository()
 	newQueuedJob(t, repo, "fast")
 
-	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), nil, nil)
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
 	p.JobTimeout = time.Minute
 
 	if err := p.Process(context.Background(), "fast"); err != nil {
@@ -164,7 +171,7 @@ func TestProcessor_ParentCancellationStillPropagates(t *testing.T) {
 	repo := jobs.NewInMemoryRepository()
 	newQueuedJob(t, repo, "parent-cancel")
 
-	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), nil, nil)
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
 	p.JobTimeout = time.Hour
 
 	ctx, cancel := context.WithCancel(context.Background())

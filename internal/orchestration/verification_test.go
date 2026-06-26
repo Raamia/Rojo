@@ -55,7 +55,9 @@ func TestProcessor_VerificationRunsInTheWorkspaceAndCompletes(t *testing.T) {
 	verifier := &fakeVerifier{report: passingReport()}
 	newQueuedJob(t, repo, "verify-ok")
 
-	p := NewProcessor(repo, NewCanceller(), bus, fakeWs, verifier)
+	p := NewProcessor(repo, NewCanceller(), bus)
+	p.Workspaces = fakeWs
+	p.Verifier = verifier
 	if err := p.Process(context.Background(), "verify-ok"); err != nil {
 		t.Fatalf("process: %v", err)
 	}
@@ -94,7 +96,9 @@ func TestProcessor_FailedChecksBlockCompletion(t *testing.T) {
 	verifier := &fakeVerifier{report: failingReport()}
 	newQueuedJob(t, repo, "verify-fail")
 
-	p := NewProcessor(repo, NewCanceller(), bus, fakeWs, verifier)
+	p := NewProcessor(repo, NewCanceller(), bus)
+	p.Workspaces = fakeWs
+	p.Verifier = verifier
 	err := p.Process(context.Background(), "verify-fail")
 	if err == nil {
 		t.Fatal("expected an error when verification fails")
@@ -132,7 +136,9 @@ func TestProcessor_VerifierErrorFailsTheJob(t *testing.T) {
 	verifier := &fakeVerifier{err: boom}
 	newQueuedJob(t, repo, "verify-err")
 
-	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), &fakeWorkspaces{}, verifier)
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
+	p.Workspaces = &fakeWorkspaces{}
+	p.Verifier = verifier
 	err := p.Process(context.Background(), "verify-err")
 	if !errors.Is(err, boom) {
 		t.Fatalf("got %v, want the underlying cause", err)
@@ -151,7 +157,8 @@ func TestProcessor_VerificationSkippedWithoutAWorkspace(t *testing.T) {
 	verifier := &fakeVerifier{report: failingReport()}
 	newQueuedJob(t, repo, "no-ws-verify")
 
-	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus(), nil, verifier)
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
+	p.Verifier = verifier
 	if err := p.Process(context.Background(), "no-ws-verify"); err != nil {
 		t.Fatalf("process: %v", err)
 	}
@@ -215,11 +222,9 @@ func TestProcessor_RealVerificationEndToEnd(t *testing.T) {
 		if err := repo.Create(context.Background(), job); err != nil {
 			t.Fatal(err)
 		}
-		p := NewProcessor(
-			repo, NewCanceller(), events.NewInProcessBus(),
-			workspace.NewGitWorkspaceManager(gitRunner, base),
-			verification.NewRunner(verifyRunner),
-		)
+		p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
+		p.Workspaces = workspace.NewGitWorkspaceManager(gitRunner, base)
+		p.Verifier = verification.NewRunner(verifyRunner)
 		_ = p.Process(context.Background(), id)
 
 		// Whatever the outcome, the worktree must be gone.

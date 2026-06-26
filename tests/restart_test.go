@@ -44,7 +44,8 @@ func startRun(t *testing.T, repo jobs.JobRepository, baseDir string) *run {
 		execution.NewSafeRunner(execution.NewExecRunner(), execution.NewAllowlist("git"), time.Minute),
 		baseDir,
 	)
-	processor := orchestration.NewProcessor(repo, canceller, bus, manager, nil)
+	processor := orchestration.NewProcessor(repo, canceller, bus)
+	processor.Workspaces = manager
 	pool := worker.NewPool(2, q, processor)
 
 	ctx, cancel := context.WithCancel(context.Background())
