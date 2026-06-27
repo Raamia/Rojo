@@ -37,11 +37,18 @@ func Reconstruct(baseDir, jobID, repoPath string) *Workspace {
 	}
 }
 
+// WorkspaceManager is what the orchestrator needs from a checkout: make one,
+// read what changed in it, throw it away.
+//
+// ListOrphans is deliberately not here. It is a maintenance sweep over a whole
+// base directory rather than an operation on one job's workspace, nothing in
+// the pipeline calls it, and putting it on the interface forced every test
+// double to stub a method no caller uses. It remains available on
+// GitWorkspaceManager for a future startup sweep.
 type WorkspaceManager interface {
 	Create(ctx context.Context, jobID, repoPath string) (*Workspace, error)
 	Cleanup(ctx context.Context, ws *Workspace) error
 	Diff(ctx context.Context, ws *Workspace) (string, error)
-	ListOrphans(ctx context.Context, repoPath string) ([]string, error)
 }
 
 func validateRepoPath(repoPath string) error {

@@ -18,52 +18,6 @@ import (
 	"github.com/Raamia/Rojo/internal/workspace"
 )
 
-// countingWorkspaces hands out a distinct workspace per requested id and
-// records what it was asked for.
-type countingWorkspaces struct {
-	mu       sync.Mutex
-	created  []string
-	cleaned  []string
-	failAt   int // create fails on this call index (-1 disables)
-	liveMax  int
-	liveNow  int
-	failWith error
-}
-
-func newCountingWorkspaces() *countingWorkspaces {
-	return &countingWorkspaces{failAt: -1}
-}
-
-func (w *countingWorkspaces) Create(_ context.Context, id, repoPath string) (*workspace.Workspace, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.failAt >= 0 && len(w.created) == w.failAt {
-		return nil, w.failWith
-	}
-	w.created = append(w.created, id)
-	return workspace.Reconstruct("/tmp/fanout", id, repoPath), nil
-}
-
-func (w *countingWorkspaces) Cleanup(_ context.Context, ws *workspace.Workspace) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if ws != nil {
-		w.cleaned = append(w.cleaned, ws.JobID)
-	}
-	return nil
-}
-
-func (w *countingWorkspaces) Diff(context.Context, *workspace.Workspace) (string, error) {
-	return "", nil
-}
-func (w *countingWorkspaces) ListOrphans(context.Context, string) ([]string, error) { return nil, nil }
-
-func (w *countingWorkspaces) snapshot() (created, cleaned []string) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return append([]string(nil), w.created...), append([]string(nil), w.cleaned...)
-}
-
 // perDirVerifier returns a different verdict per workspace path, so a test can
 // decide which attempt succeeds. It also records peak concurrency.
 type perDirVerifier struct {
@@ -135,7 +89,7 @@ func TestVariantID_SingleVariantKeepsThePlainJobID(t *testing.T) {
 // repository, which none of them modify.
 func TestProcessor_FanoutCreatesOneWorkspacePerVariant(t *testing.T) {
 	repo := jobs.NewInMemoryRepository()
-	ws := newCountingWorkspaces()
+	ws := newFakeWorkspaces()
 	v := &perDirVerifier{passing: map[string]bool{"fan-v0": true, "fan-v1": true, "fan-v2": true}}
 	newQueuedJob(t, repo, "fan")
 
@@ -167,7 +121,7 @@ func TestProcessor_FanoutCreatesOneWorkspacePerVariant(t *testing.T) {
 // wall clock.
 func TestProcessor_VariantsAreVerifiedConcurrently(t *testing.T) {
 	repo := jobs.NewInMemoryRepository()
-	ws := newCountingWorkspaces()
+	ws := newFakeWorkspaces()
 	v := &perDirVerifier{
 		passing: map[string]bool{"conc-v0": true, "conc-v1": true, "conc-v2": true, "conc-v3": true},
 		delay:   150 * time.Millisecond,
@@ -225,7 +179,7 @@ func TestProcessor_JobSucceedsIfAnyVariantPasses(t *testing.T) {
 	sub := bus.Subscribe("mixed", 128)
 	defer bus.Unsubscribe(sub)
 
-	ws := newCountingWorkspaces()
+	ws := newFakeWorkspaces()
 	v := &perDirVerifier{passing: map[string]bool{"mixed-v2": true}} // only the third passes
 	newQueuedJob(t, repo, "mixed")
 
@@ -254,7 +208,7 @@ func TestProcessor_JobSucceedsIfAnyVariantPasses(t *testing.T) {
 // If nothing passes, the gate still holds.
 func TestProcessor_JobFailsWhenNoVariantPasses(t *testing.T) {
 	repo := jobs.NewInMemoryRepository()
-	ws := newCountingWorkspaces()
+	ws := newFakeWorkspaces()
 	v := &perDirVerifier{passing: map[string]bool{}}
 	newQueuedJob(t, repo, "allbad")
 
@@ -279,7 +233,7 @@ func TestProcessor_JobFailsWhenNoVariantPasses(t *testing.T) {
 // A verifier that errors on one attempt must not sink the others.
 func TestProcessor_OneVariantErroringDoesNotStopTheRest(t *testing.T) {
 	repo := jobs.NewInMemoryRepository()
-	ws := newCountingWorkspaces()
+	ws := newFakeWorkspaces()
 	v := &perDirVerifier{
 		passing:  map[string]bool{"partial-v1": true},
 		failWith: map[string]error{"partial-v0": errors.New("toolchain missing")},
@@ -302,9 +256,8 @@ func TestProcessor_OneVariantErroringDoesNotStopTheRest(t *testing.T) {
 // A checkout that fails partway must still leave the earlier ones reclaimable.
 func TestProcessor_PartialWorkspaceFailureStillCleansUp(t *testing.T) {
 	repo := jobs.NewInMemoryRepository()
-	ws := newCountingWorkspaces()
+	ws := newFakeWorkspaces()
 	ws.failAt = 2 // first two succeed, third fails
-	ws.failWith = errors.New("disk full")
 	newQueuedJob(t, repo, "partial-ws")
 
 	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
@@ -331,7 +284,7 @@ func TestProcessor_PartialWorkspaceFailureStillCleansUp(t *testing.T) {
 // Default behavior is unchanged: one variant, plain job ID, one worktree.
 func TestProcessor_DefaultIsASingleVariant(t *testing.T) {
 	repo := jobs.NewInMemoryRepository()
-	ws := newCountingWorkspaces()
+	ws := newFakeWorkspaces()
 	bus := events.NewInProcessBus()
 	sub := bus.Subscribe("single", 64)
 	defer bus.Unsubscribe(sub)

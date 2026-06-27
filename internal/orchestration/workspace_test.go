@@ -28,14 +28,24 @@ type fakeWorkspaces struct {
 	cleanupCalls int
 	cleanupErr   error
 
+	// created and cleaned record the ids passed in, so a test can assert how
+	// variants were named and that each one was reclaimed.
+	created []string
+	cleaned []string
+	// failAt makes the Nth Create fail (-1, the zero-ish default set by
+	// newFakeWorkspaces, disables it).
+	failAt int
+
 	cleanupCtxErr    error
 	cleanupCtxWasSet bool
-	created          *workspace.Workspace
 
 	// afterCreate runs once the workspace exists, letting a test act inside the
 	// exact window where a worktree is live and must not be leaked.
 	afterCreate func()
 }
+
+// newFakeWorkspaces returns a stub with failure injection disabled.
+func newFakeWorkspaces() *fakeWorkspaces { return &fakeWorkspaces{failAt: -1} }
 
 func (f *fakeWorkspaces) Create(_ context.Context, jobID, repoPath string) (*workspace.Workspace, error) {
 	f.mu.Lock()
@@ -45,13 +55,17 @@ func (f *fakeWorkspaces) Create(_ context.Context, jobID, repoPath string) (*wor
 		f.mu.Unlock()
 		return nil, err
 	}
+	if f.failAt > 0 && f.createCalls > f.failAt {
+		f.mu.Unlock()
+		return nil, errFakeCreate
+	}
+	f.created = append(f.created, jobID)
 	ws := &workspace.Workspace{
 		JobID:    jobID,
 		Branch:   "rojo/job/" + jobID,
 		Path:     filepath.Join("/tmp/rojo-test", jobID),
 		RepoPath: repoPath,
 	}
-	f.created = ws
 	hook := f.afterCreate
 	f.mu.Unlock()
 
@@ -61,22 +75,33 @@ func (f *fakeWorkspaces) Create(_ context.Context, jobID, repoPath string) (*wor
 	return ws, nil
 }
 
-func (f *fakeWorkspaces) Cleanup(ctx context.Context, _ *workspace.Workspace) error {
+var errFakeCreate = errors.New("fake: cannot create workspace")
+
+func (f *fakeWorkspaces) Cleanup(ctx context.Context, ws *workspace.Workspace) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cleanupCalls++
+	if ws != nil {
+		f.cleaned = append(f.cleaned, ws.JobID)
+	}
 	f.cleanupCtxWasSet = true
 	f.cleanupCtxErr = ctx.Err()
 	return f.cleanupErr
 }
 
 func (f *fakeWorkspaces) Diff(context.Context, *workspace.Workspace) (string, error) { return "", nil }
-func (f *fakeWorkspaces) ListOrphans(context.Context, string) ([]string, error)      { return nil, nil }
 
 func (f *fakeWorkspaces) counts() (create, cleanup int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.createCalls, f.cleanupCalls
+}
+
+// snapshot returns the ids Create and Cleanup were called with.
+func (f *fakeWorkspaces) snapshot() (created, cleaned []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.created...), append([]string(nil), f.cleaned...)
 }
 
 func TestProcessor_CreatesAndCleansUpWorkspaceOnSuccess(t *testing.T) {
@@ -348,9 +373,6 @@ func (o *observingWorkspaces) Cleanup(ctx context.Context, ws *workspace.Workspa
 }
 func (o *observingWorkspaces) Diff(ctx context.Context, ws *workspace.Workspace) (string, error) {
 	return o.inner.Diff(ctx, ws)
-}
-func (o *observingWorkspaces) ListOrphans(ctx context.Context, repoPath string) ([]string, error) {
-	return o.inner.ListOrphans(ctx, repoPath)
 }
 
 func splitLines(s string) []string {
