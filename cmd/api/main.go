@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Raamia/Rojo/internal/agents/model"
+	"github.com/Raamia/Rojo/internal/agents/planner"
 	"github.com/Raamia/Rojo/internal/api"
 	"github.com/Raamia/Rojo/internal/config"
 	"github.com/Raamia/Rojo/internal/events"
@@ -72,6 +74,20 @@ func main() {
 	processor := orchestration.NewProcessor(repo, canceller, bus)
 	processor.Workspaces = workspaces
 	processor.Verifier = verifier
+
+	// The planner only runs when a model is configured. Without a key the
+	// pipeline still does useful work — isolate, verify, report — it just does
+	// not plan, so an unset key degrades the service rather than breaking it.
+	if cfg.AnthropicAPIKey != "" {
+		processor.Planner = planner.NewPlanner(model.NewAnthropicClient(model.AnthropicOptions{
+			APIKey:  cfg.AnthropicAPIKey,
+			Model:   cfg.ModelID,
+			Timeout: cfg.JobTimeout,
+		}))
+		logger.Info("planner enabled", "model", modelName(cfg.ModelID))
+	} else {
+		logger.Warn("ANTHROPIC_API_KEY not set: the planning step is disabled")
+	}
 	processor.JobTimeout = cfg.JobTimeout
 	processor.Variants = cfg.FanoutVariants
 	if cfg.FanoutVariants > 1 {
@@ -189,6 +205,15 @@ func main() {
 	pool.Wait()
 
 	logger.Info("shutdown complete")
+}
+
+// modelName reports the model that will actually be used, so the startup log
+// is accurate when ROJO_MODEL is unset and the client falls back to its default.
+func modelName(configured string) string {
+	if configured != "" {
+		return configured
+	}
+	return string(model.DefaultModel)
 }
 
 func buildRepository(logger *slog.Logger, cfg config.Config) (jobs.JobRepository, events.Store, func(), error) {

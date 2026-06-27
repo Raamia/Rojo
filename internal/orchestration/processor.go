@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/Raamia/Rojo/internal/agents/planner"
 	"github.com/Raamia/Rojo/internal/events"
 	"github.com/Raamia/Rojo/internal/jobs"
 	"github.com/Raamia/Rojo/internal/verification"
@@ -20,6 +21,12 @@ type Verifier interface {
 	Verify(ctx context.Context, dir string) (verification.Report, error)
 }
 
+// Planner turns a task into a structured plan. Declared here, near its
+// consumer, so the processor can be tested without calling a model.
+type Planner interface {
+	Plan(ctx context.Context, req planner.Request) (planner.Plan, error)
+}
+
 type Processor struct {
 	Repo      jobs.JobRepository
 	Canceller *Canceller
@@ -30,6 +37,9 @@ type Processor struct {
 	// Verifier is optional and only runs when a workspace exists — there is
 	// nothing meaningful to check without a checkout.
 	Verifier Verifier
+	// Planner is optional. When nil the planning step is a no-op, which is how
+	// the pipeline runs with no model configured.
+	Planner Planner
 	// Variants is how many independent attempts each job gets. 1 (the default)
 	// runs a job once. Higher values fan the job out across that many isolated
 	// checkouts, verify them all, and keep the first that passes.
@@ -102,6 +112,11 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 	// Cleanup is handed jobCtx even though it is often already cancelled here;
 	// it deliberately strips cancellation internally so that a cancelled job
 	// still gets cleaned up.
+	// The plan is produced by the planning step and consumed by the steps after
+	// it; it is declared here so it outlives one loop iteration.
+	var plan planner.Plan
+	_ = plan // consumed by the implementor once that is wired in
+
 	var cands []*candidate
 	defer func() {
 		if p.Workspaces == nil {
@@ -151,6 +166,22 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 		// step.completed means the work finished rather than just the status
 		// write. Today only preparing_workspace does anything; the planner,
 		// implementor, verifier and reviewer slot in beside it.
+		if next == jobs.StatusPlanning && p.Planner != nil {
+			created, planErr := p.Planner.Plan(jobCtx, planner.Request{
+				Task:     job.Task,
+				RepoPath: job.RepoPath,
+			})
+			if planErr != nil {
+				return p.markFailed(job, fmt.Errorf("plan job %s: %w", jobID, planErr))
+			}
+			plan = created
+			log.Info("plan created", "summary", plan.Summary, "steps", len(plan.Steps))
+			p.emit(jobCtx, jobID, events.TypePlanCreated, map[string]any{
+				"summary": plan.Summary,
+				"steps":   plan.Steps,
+			})
+		}
+
 		if next == jobs.StatusPreparingWorkspace && p.Workspaces != nil {
 			total := variantCount(p.Variants)
 			created, wsErr := p.createCandidates(jobCtx, jobID, job.RepoPath, total)

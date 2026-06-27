@@ -18,6 +18,8 @@ type Config struct {
 	ShutdownTimeout time.Duration
 	JobTimeout      time.Duration
 	FanoutVariants  int
+	AnthropicAPIKey string
+	ModelID         string
 	AuthToken       string
 	RateLimitBurst  int
 	RateLimitRPS    float64
@@ -33,6 +35,8 @@ func Load() (Config, error) {
 		ShutdownTimeout: getEnvDuration("ROJO_SHUTDOWN_TIMEOUT", 15*time.Second),
 		JobTimeout:      getEnvDuration("ROJO_JOB_TIMEOUT", 30*time.Minute),
 		FanoutVariants:  getEnvInt("ROJO_FANOUT_VARIANTS", 1),
+		AnthropicAPIKey: os.Getenv("ANTHROPIC_API_KEY"),
+		ModelID:         getEnv("ROJO_MODEL", ""),
 		AuthToken:       os.Getenv("ROJO_AUTH_TOKEN"),
 		RateLimitBurst:  getEnvInt("ROJO_RATE_LIMIT_BURST", 30),
 		RateLimitRPS:    getEnvFloat("ROJO_RATE_LIMIT_RPS", 5),

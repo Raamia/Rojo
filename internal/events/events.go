@@ -22,6 +22,7 @@ const (
 	TypeStepStarted   = "step.started"
 	TypeStepCompleted = "step.completed"
 
+	TypePlanCreated           = "plan.created"
 	TypeWorkspaceCreated      = "workspace.created"
 	TypeVerificationCompleted = "verification.completed"
 	TypeFanoutCompleted       = "fanout.completed"
