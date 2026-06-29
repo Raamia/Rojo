@@ -29,11 +29,13 @@ and the event-history route is not registered.
 ## What a job does today
 
 1. The job is validated, persisted and queued.
-2. A worker creates an isolated git worktree on a `rojo/job/<id>` branch, so the
+2. If `ANTHROPIC_API_KEY` is set, the planner turns the task into a structured
+   plan. Without a key this step is skipped and the rest still runs.
+3. A worker creates an isolated git worktree on a `rojo/job/<id>` branch, so the
    original repository is never modified.
-3. Deterministic verification runs **inside that worktree**: `gofmt -l .`,
+4. Deterministic verification runs **inside that worktree**: `gofmt -l .`,
    `go vet ./...`, `go test ./...`.
-4. If every check passes the job completes; if any fails the job ends `failed`
+5. If every check passes the job completes; if any fails the job ends `failed`
    with a summary. Either way the worktree and its branch are removed.
 
 On startup Rojo reconciles the database with its empty queue: jobs still marked
@@ -51,8 +53,8 @@ Every job is bounded by `ROJO_JOB_TIMEOUT`. A job that runs out of time ends
 `failed` (not `cancelled` — that is reserved for a caller asking it to stop) and
 still has its worktree reclaimed.
 
-The planner, implementor and reviewer are scaffolded but not yet part of this
-pipeline.
+The implementor and reviewer are still scaffolded but not part of this pipeline
+The known limitations are documented below.
 
 ## Configuration
 
@@ -66,6 +68,8 @@ pipeline.
 | `ROJO_SHUTDOWN_TIMEOUT`   | `15s`                       | Graceful shutdown deadline        |
 | `ROJO_JOB_TIMEOUT`        | `30m`                       | Maximum wall-clock time for one job |
 | `ROJO_FANOUT_VARIANTS`    | `1`                         | Attempts per job, each in its own worktree (max 8) |
+| `ANTHROPIC_API_KEY`       | *(unset → planning disabled)* | API key for the planner |
+| `ROJO_MODEL`              | `claude-opus-4-8`           | Model the planner uses |
 | `ROJO_AUTH_TOKEN`         | *(unset → **auth disabled**)* | Bearer token required on every route except `/healthz` |
 | `ROJO_RATE_LIMIT_BURST`   | `30`                        | Token-bucket capacity per client IP |
 | `ROJO_RATE_LIMIT_RPS`     | `5`                         | Token refill per second           |
