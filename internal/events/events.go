@@ -56,10 +56,19 @@ func (b *InProcessBus) OnDrop(cb func(jobID string)) {
 	b.dropCB = cb
 }
 
-func (b *InProcessBus) Publish(_ context.Context, e Event) error {
+// stamp fills in the emission time if the caller left it unset. Every path
+// that publishes an event calls this, so a stored event always carries a
+// timestamp — job duration and queue wait are derived from these, and a zero
+// time silently poisons both.
+func stamp(e Event) Event {
 	if e.CreatedAt.IsZero() {
 		e.CreatedAt = time.Now().UTC()
 	}
+	return e
+}
+
+func (b *InProcessBus) Publish(_ context.Context, e Event) error {
+	e = stamp(e)
 	// Fan out while still holding the lock. Unsubscribe closes sub.C, so
 	// snapshotting the subscribers and sending after releasing the lock races
 	// any concurrent disconnect and panics with "send on closed channel" —

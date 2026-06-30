@@ -86,24 +86,32 @@ func TestSecurity_MalformedEnvValuesSilentlyFallBack_DocumentsGap(t *testing.T) 
 		"and no log line.", cfg.RateLimitBurst, cfg.RateLimitRPS, cfg.WorkerCount, cfg.ShutdownTimeout)
 }
 
-// Config carries two secrets in plain string fields with no redaction helper
-// (no String()/LogValue()/MarshalJSON). Any %+v, slog.Any("cfg", cfg) or
-// json.Marshal added later dumps both into the log stream.
-func TestSecurity_ConfigStructHasNoSecretRedaction_DocumentsGap(t *testing.T) {
+// FIXED: Config implements slog.LogValuer and Stringer, so both secrets are
+// replaced with [set]/[unset] before reaching a log line. main.go now logs the
+// effective configuration at startup, which is exactly the call site that made
+// this worth fixing rather than documenting.
+func TestSecurity_ConfigRedactsSecrets(t *testing.T) {
 	cfg := Config{
-		AuthToken: "SECRET-BEARER-TOKEN",
-		DBURL:     "postgres://rojo:hunter2@db.internal:5432/rojo",
-		HTTPAddr:  ":8080",
+		AuthToken:       "SECRET-BEARER-TOKEN",
+		AnthropicAPIKey: "sk-ant-SECRET",
+		HTTPAddr:        ":8080",
 	}
 
-	dumped := fmt.Sprintf("%+v", cfg)
-	for _, needle := range []string{"SECRET-BEARER-TOKEN", "hunter2"} {
-		if !strings.Contains(dumped, needle) {
-			t.Fatalf("VULNERABILITY FIXED? %q is now redacted", needle)
+	for _, rendered := range []string{fmt.Sprintf("%+v", cfg), fmt.Sprintf("%v", cfg), cfg.String()} {
+		for _, secret := range []string{"SECRET-BEARER-TOKEN", "sk-ant-SECRET"} {
+			if strings.Contains(rendered, secret) {
+				t.Errorf("rendered config leaked %q: %s", secret, rendered)
+			}
+		}
+		if !strings.Contains(rendered, "[set]") {
+			t.Errorf("rendered config should mark secrets as [set]: %s", rendered)
 		}
 	}
-	t.Logf("GAP: fmt %%+v of Config exposes both secrets: %s", dumped)
-	t.Log("NOTE: cmd/api/main.go does NOT currently log the config, and pgx redacts the password " +
-		"in its own parse errors (verified: `cannot parse postgres://rojo:xxxxx@...`). " +
-		"This is a latent footgun, not an active leak.")
+
+	// An unset secret is distinguishable from a set one, which is what makes
+	// the startup log useful for spotting a dropped key.
+	empty := fmt.Sprintf("%+v", Config{HTTPAddr: ":8080"})
+	if !strings.Contains(empty, "[unset]") {
+		t.Errorf("an unset secret should render as [unset]: %s", empty)
+	}
 }

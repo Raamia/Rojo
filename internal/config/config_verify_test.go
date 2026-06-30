@@ -10,7 +10,7 @@ import (
 // which forces the documented defaults while keeping automatic cleanup.
 var allConfigEnvVars = []string{
 	"ROJO_HTTP_ADDR",
-	"ROJO_DB_URL",
+	"ROJO_DATA_DIR",
 	"ROJO_QUEUE_BUFFER",
 	"ROJO_WORKER_COUNT",
 	"ROJO_WORKTREE_DIR",
@@ -44,7 +44,7 @@ func TestLoad_Defaults(t *testing.T) {
 
 	want := Config{
 		HTTPAddr:        DefaultHTTPAddr,
-		DBURL:           "",
+		DataDir:         "./rojo-data",
 		QueueBuffer:     64,
 		WorkerCount:     4,
 		WorktreeBaseDir: "/tmp/rojo-worktrees",
@@ -67,7 +67,7 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	clearConfigEnv(t)
 
 	t.Setenv("ROJO_HTTP_ADDR", ":9090")
-	t.Setenv("ROJO_DB_URL", "postgres://localhost/rojo")
+	t.Setenv("ROJO_DATA_DIR", "/var/rojo/data")
 	t.Setenv("ROJO_QUEUE_BUFFER", "128")
 	t.Setenv("ROJO_WORKER_COUNT", "8")
 	t.Setenv("ROJO_WORKTREE_DIR", "/var/rojo/worktrees")
@@ -85,7 +85,7 @@ func TestLoad_EnvOverrides(t *testing.T) {
 
 	want := Config{
 		HTTPAddr:        ":9090",
-		DBURL:           "postgres://localhost/rojo",
+		DataDir:         "/var/rojo/data",
 		QueueBuffer:     128,
 		WorkerCount:     8,
 		WorktreeBaseDir: "/var/rojo/worktrees",
@@ -172,6 +172,7 @@ func TestLoad_BadValuesFallBack(t *testing.T) {
 func validConfig() Config {
 	return Config{
 		HTTPAddr:        DefaultHTTPAddr,
+		DataDir:         "./rojo-data",
 		QueueBuffer:     64,
 		WorkerCount:     4,
 		WorktreeBaseDir: "/tmp/rojo-worktrees",
@@ -195,6 +196,11 @@ func TestValidate(t *testing.T) {
 			name:    "valid config",
 			mutate:  func(c *Config) {},
 			wantErr: false,
+		},
+		{
+			name:    "empty DataDir",
+			mutate:  func(c *Config) { c.DataDir = "" },
+			wantErr: true,
 		},
 		{
 			name:    "empty HTTPAddr",

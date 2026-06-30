@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"strconv"
@@ -11,7 +12,7 @@ import (
 
 type Config struct {
 	HTTPAddr        string
-	DBURL           string
+	DataDir         string
 	QueueBuffer     int
 	WorkerCount     int
 	WorktreeBaseDir string
@@ -28,7 +29,7 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		HTTPAddr:        getEnv("ROJO_HTTP_ADDR", DefaultHTTPAddr),
-		DBURL:           os.Getenv("ROJO_DB_URL"),
+		DataDir:         getEnv("ROJO_DATA_DIR", "./rojo-data"),
 		QueueBuffer:     getEnvInt("ROJO_QUEUE_BUFFER", 64),
 		WorkerCount:     getEnvInt("ROJO_WORKER_COUNT", 4),
 		WorktreeBaseDir: getEnv("ROJO_WORKTREE_DIR", "/tmp/rojo-worktrees"),
@@ -72,9 +73,49 @@ func (c Config) IsPubliclyBound() bool {
 	return !ip.IsLoopback()
 }
 
+// LogValue redacts the secrets before Config reaches a log line.
+//
+// Config holds an auth token and an API key in plain string fields. Without
+// this, any slog.Any("config", cfg) — including the startup line below —
+// would print both. Implementing slog.LogValuer means the redaction travels
+// with the type instead of relying on every call site to remember.
+func (c Config) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("http_addr", c.HTTPAddr),
+		slog.String("data_dir", c.DataDir),
+		slog.Int("queue_buffer", c.QueueBuffer),
+		slog.Int("worker_count", c.WorkerCount),
+		slog.String("worktree_dir", c.WorktreeBaseDir),
+		slog.Duration("shutdown_timeout", c.ShutdownTimeout),
+		slog.Duration("job_timeout", c.JobTimeout),
+		slog.Int("fanout_variants", c.FanoutVariants),
+		slog.Int("rate_limit_burst", c.RateLimitBurst),
+		slog.Float64("rate_limit_rps", c.RateLimitRPS),
+		slog.String("model", c.ModelID),
+		slog.String("auth_token", redacted(c.AuthToken)),
+		slog.String("anthropic_api_key", redacted(c.AnthropicAPIKey)),
+	)
+}
+
+// String routes fmt verbs through the same redaction, so a stray %v or %+v
+// cannot leak what LogValue is careful to hide.
+func (c Config) String() string {
+	return c.LogValue().String()
+}
+
+func redacted(secret string) string {
+	if secret == "" {
+		return "[unset]"
+	}
+	return "[set]"
+}
+
 func (c Config) Validate() error {
 	if c.HTTPAddr == "" {
 		return errors.New("ROJO_HTTP_ADDR must not be empty")
+	}
+	if c.DataDir == "" {
+		return errors.New("ROJO_DATA_DIR must not be empty")
 	}
 	if c.QueueBuffer <= 0 {
 		return fmt.Errorf("ROJO_QUEUE_BUFFER must be positive, got %d", c.QueueBuffer)

@@ -27,6 +27,11 @@ const branchPrefix = "rojo/job/"
 // This is a mitigation, not a sandbox: it does not stop a repo from being huge,
 // and it says nothing about what the job's own build tooling does. Restricting
 // repo paths to an allowlist of trusted roots is the complementary control.
+// SafeGitArgs is exported so other packages that shell out to git in a
+// caller-supplied repository reuse these flags rather than duplicating
+// security-critical configuration.
+func SafeGitArgs(args ...string) []string { return gitArgs(args...) }
+
 func gitArgs(args ...string) []string {
 	hardened := []string{
 		"-c", "core.hooksPath=/dev/null",

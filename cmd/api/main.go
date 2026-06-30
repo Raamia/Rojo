@@ -19,7 +19,7 @@ import (
 	"github.com/Raamia/Rojo/internal/jobs"
 	"github.com/Raamia/Rojo/internal/orchestration"
 	"github.com/Raamia/Rojo/internal/queue"
-	"github.com/Raamia/Rojo/internal/storage/postgres"
+	"github.com/Raamia/Rojo/internal/storage/filestore"
 	"github.com/Raamia/Rojo/internal/verification"
 	"github.com/Raamia/Rojo/internal/worker"
 	"github.com/Raamia/Rojo/internal/workspace"
@@ -35,19 +35,21 @@ func main() {
 		os.Exit(2)
 	}
 
-	repo, store, closeRepo, err := buildRepository(logger, cfg)
+	logger.Info("configuration loaded", "config", cfg)
+
+	store, err := filestore.New(cfg.DataDir)
 	if err != nil {
-		logger.Error("build repository", "err", err)
+		logger.Error("open data dir", "path", cfg.DataDir, "err", err)
 		os.Exit(1)
 	}
-	defer closeRepo()
+	var repo jobs.JobRepository = store
+	logger.Info("data dir opened", "path", cfg.DataDir, "jobs_loaded", store.Loaded())
 
 	q := queue.New(cfg.QueueBuffer)
 	canceller := orchestration.NewCanceller()
-	var bus events.Bus = events.NewInProcessBus()
-	if store != nil {
-		bus = events.NewPersistingBus(bus, store)
-	}
+	// Every event is written to the job's log before it is fanned out, so the
+	// history endpoint and the WebSocket stream never disagree.
+	var bus events.Bus = events.NewPersistingBus(events.NewInProcessBus(), store)
 	// Git runs through the allowlisted runner rather than raw exec, so the
 	// orchestrator can only ever invoke git, with a bounded runtime.
 	gitRunner := execution.NewSafeRunner(
@@ -132,10 +134,8 @@ func main() {
 	stream := api.NewStreamHandler(bus)
 	mux.HandleFunc("GET /api/v1/jobs/{jobID}/stream", stream.Stream)
 
-	if store != nil {
-		history := api.NewEventsHandler(store)
-		mux.HandleFunc("GET /api/v1/jobs/{jobID}/events", history.History)
-	}
+	history := api.NewEventsHandler(store)
+	mux.HandleFunc("GET /api/v1/jobs/{jobID}/events", history.History)
 
 	var handlerChain http.Handler = mux
 	handlerChain = api.LoggerMiddleware(logger)(handlerChain)
@@ -214,20 +214,4 @@ func modelName(configured string) string {
 		return configured
 	}
 	return string(model.DefaultModel)
-}
-
-func buildRepository(logger *slog.Logger, cfg config.Config) (jobs.JobRepository, events.Store, func(), error) {
-	if cfg.DBURL == "" {
-		logger.Warn("ROJO_DB_URL not set, using in-memory repository")
-		return jobs.NewInMemoryRepository(), nil, func() {}, nil
-	}
-	pool, err := postgres.NewPool(context.Background(), postgres.Config{
-		URL:      cfg.DBURL,
-		MaxConns: 8,
-	})
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	logger.Info("connected to postgres")
-	return postgres.NewJobRepository(pool), events.NewPostgresStore(pool), func() { pool.Close() }, nil
 }
