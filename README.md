@@ -8,23 +8,19 @@ Rojo accepts a software task, creates an isolated Git worktree, plans the work, 
 
 - Go 1.25+
 - Git
-- PostgreSQL
-- Docker
+
+That's it — no database, no Docker, no services. Rojo stores everything in a
+directory you point it at.
 
 ## Getting started
 
 ```bash
-# Bring up postgres
-make db-up
-make migrate-up
-
-# Run the API
-ROJO_DB_URL=postgres://rojo:rojo@localhost:5432/rojo?sslmode=disable make run
+make run
 ```
 
-The server listens on `:8080` by default. Postgres is optional — with
-`ROJO_DB_URL` unset the API is fully functional but stores jobs in memory only,
-and the event-history route is not registered.
+The server listens on `:8080` by default and writes to `./rojo-data`. Jobs,
+their event history, and their artifacts persist there, so everything survives a
+restart out of the box.
 
 ## What a job does today
 
@@ -38,11 +34,9 @@ and the event-history route is not registered.
 5. If every check passes the job completes; if any fails the job ends `failed`
    with a summary. Either way the worktree and its branch are removed.
 
-On startup Rojo reconciles the database with its empty queue: jobs still marked
+On startup Rojo reconciles the stored jobs with its empty queue: jobs still marked
 `queued` are re-enqueued, and jobs interrupted mid-flight by the previous
-process are marked `failed` and have their worktrees reclaimed. With
-`ROJO_DB_URL` unset there is nothing to recover, since the in-memory repository
-dies with the process.
+process are marked `failed` and have their worktrees reclaimed.
 
 Set `ROJO_FANOUT_VARIANTS` above 1 to attempt each job several ways at once:
 every variant gets its own worktree, all are verified concurrently, and the
@@ -61,7 +55,7 @@ The known limitations are documented below.
 | Env var                    | Default                     | Description                       |
 | -------------------------- | --------------------------- | --------------------------------- |
 | `ROJO_HTTP_ADDR`          | `127.0.0.1:8080`            | API listen address. Loopback by default |
-| `ROJO_DB_URL`             | *(unset → in-memory repo)*  | Postgres connection URL           |
+| `ROJO_DATA_DIR`           | `./rojo-data`               | Where jobs, events and artifacts are stored |
 | `ROJO_QUEUE_BUFFER`       | `64`                        | Job queue capacity                |
 | `ROJO_WORKER_COUNT`       | `4`                         | Worker pool size                  |
 | `ROJO_WORKTREE_DIR`       | `/tmp/rojo-worktrees`       | Root dir for job worktrees        |
@@ -90,8 +84,22 @@ log if a setting does not appear to take effect.
 | GET    | `/api/v1/jobs`                      | List jobs               |
 | GET    | `/api/v1/jobs/{jobID}`              | Get one job             |
 | POST   | `/api/v1/jobs/{jobID}/cancel`       | Cancel a running job    |
-| GET    | `/api/v1/jobs/{jobID}/events`       | Job event history (only registered when `ROJO_DB_URL` is set) |
+| GET    | `/api/v1/jobs/{jobID}/events`       | Job event history |
 | GET    | `/api/v1/jobs/{jobID}/stream`       | Live event WebSocket    |
+
+## Storage
+
+Everything lives under `ROJO_DATA_DIR`, one directory per job:
+
+```
+rojo-data/jobs/<job-id>/
+  job.json       current state
+  events.jsonl   append-only event log
+  diff.patch     artifacts, when the job produces them
+```
+
+Plain files on purpose — a patch you can `git apply`, a log you can `cat`, and
+no schema to migrate.
 
 ## Architecture
 
@@ -107,8 +115,7 @@ internal/workspace      Git worktree manager
 internal/verification   Deterministic check runner (gofmt, go vet, go test)
 internal/agents         Model client, planner, implementor, reviewer (not yet wired)
 internal/events         Event bus + postgres store
-internal/storage/postgres  pgx-backed JobRepository
-migrations              SQL migrations (goose)
+internal/storage/filestore  Durable job, event and artifact storage on disk
 tests                   End-to-end tests
 ```
 
