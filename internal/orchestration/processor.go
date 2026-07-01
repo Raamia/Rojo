@@ -10,6 +10,7 @@ import (
 	"github.com/Raamia/Rojo/internal/agents/planner"
 	"github.com/Raamia/Rojo/internal/events"
 	"github.com/Raamia/Rojo/internal/jobs"
+	"github.com/Raamia/Rojo/internal/repocontext"
 	"github.com/Raamia/Rojo/internal/verification"
 	"github.com/Raamia/Rojo/internal/workspace"
 )
@@ -27,6 +28,12 @@ type Planner interface {
 	Plan(ctx context.Context, req planner.Request) (planner.Plan, error)
 }
 
+// ContextSelector picks the files worth showing the planner. Optional: with
+// none configured the planner sees the task and repo path only.
+type ContextSelector interface {
+	Select(ctx context.Context, repoPath, task string) (repocontext.Context, error)
+}
+
 type Processor struct {
 	Repo      jobs.JobRepository
 	Canceller *Canceller
@@ -40,6 +47,8 @@ type Processor struct {
 	// Planner is optional. When nil the planning step is a no-op, which is how
 	// the pipeline runs with no model configured.
 	Planner Planner
+	// Context is optional and only consulted when a Planner is set.
+	Context ContextSelector
 	// Variants is how many independent attempts each job gets. 1 (the default)
 	// runs a job once. Higher values fan the job out across that many isolated
 	// checkouts, verify them all, and keep the first that passes.
@@ -167,10 +176,23 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 		// write. Today only preparing_workspace does anything; the planner,
 		// implementor, verifier and reviewer slot in beside it.
 		if next == jobs.StatusPlanning && p.Planner != nil {
-			created, planErr := p.Planner.Plan(jobCtx, planner.Request{
-				Task:     job.Task,
-				RepoPath: job.RepoPath,
-			})
+			req := planner.Request{Task: job.Task, RepoPath: job.RepoPath}
+
+			// Context selection is best effort. Failing to read the repository
+			// should give the planner less to work with, not fail the job —
+			// the verification gate is what catches a plan that was too thin.
+			if p.Context != nil {
+				sel, ctxErr := p.Context.Select(jobCtx, job.RepoPath, job.Task)
+				if ctxErr != nil {
+					log.Warn("select repo context", "err", ctxErr)
+				} else {
+					req.Files = sel.Files
+					log.Info("repo context selected",
+						"files", len(sel.Files), "tracked", sel.TotalTracked, "keywords", sel.Keywords)
+				}
+			}
+
+			created, planErr := p.Planner.Plan(jobCtx, req)
 			if planErr != nil {
 				return p.markFailed(job, fmt.Errorf("plan job %s: %w", jobID, planErr))
 			}

@@ -19,6 +19,7 @@ import (
 	"github.com/Raamia/Rojo/internal/jobs"
 	"github.com/Raamia/Rojo/internal/orchestration"
 	"github.com/Raamia/Rojo/internal/queue"
+	"github.com/Raamia/Rojo/internal/repocontext"
 	"github.com/Raamia/Rojo/internal/storage/filestore"
 	"github.com/Raamia/Rojo/internal/verification"
 	"github.com/Raamia/Rojo/internal/worker"
@@ -89,6 +90,7 @@ func main() {
 			Model:   cfg.ModelID,
 			Timeout: cfg.JobTimeout,
 		}))
+		processor.Context = repocontext.NewSelector(gitRunner)
 		logger.Info("planner enabled", "model", modelName(cfg.ModelID))
 	} else {
 		logger.Warn("ANTHROPIC_API_KEY not set: the planning step is disabled")
