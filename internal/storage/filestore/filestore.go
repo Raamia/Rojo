@@ -45,6 +45,8 @@ var ErrInvalidJobID = errors.New("invalid job id")
 
 type Store struct {
 	dir string
+	// unlock releases the data directory's single-writer lock; see Close.
+	unlock func()
 
 	mu    sync.RWMutex
 	index map[string]*jobs.Job
@@ -60,9 +62,17 @@ func New(dir string) (*Store, error) {
 		return nil, fmt.Errorf("create data dir %s: %w", root, err)
 	}
 
-	s := &Store{dir: dir, index: make(map[string]*jobs.Job)}
+	// Exclusive ownership before anything is read: an index built while
+	// another process is writing is already wrong.
+	unlock, err := acquireLock(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	s := &Store{dir: dir, unlock: unlock, index: make(map[string]*jobs.Job)}
 	entries, err := os.ReadDir(root)
 	if err != nil {
+		unlock()
 		return nil, fmt.Errorf("read data dir %s: %w", root, err)
 	}
 	for _, e := range entries {
@@ -76,6 +86,15 @@ func New(dir string) (*Store, error) {
 		s.index[job.ID] = job
 	}
 	return s, nil
+}
+
+// Close releases the data directory so another process may take it over. The
+// kernel would release the lock at exit anyway; calling this makes handover
+// immediate rather than whenever the OS gets around to it.
+func (s *Store) Close() {
+	if s.unlock != nil {
+		s.unlock()
+	}
 }
 
 // Loaded reports how many jobs were recovered from disk at startup.

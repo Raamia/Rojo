@@ -120,7 +120,9 @@ func TestStore_SurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A new process, same directory.
+	// A new process, same directory. The old process is gone — which the
+	// single-writer lock insists on — so its store is closed first.
+	first.Close()
 	second, err := New(dir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
@@ -343,6 +345,7 @@ func TestStore_CorruptJobIsSkippedAtStartup(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	s.Close() // the "crashed" process's lock is gone with it
 	reopened, err := New(dir)
 	if err != nil {
 		t.Fatalf("a corrupt job should not fail startup: %v", err)
@@ -402,4 +405,32 @@ func TestStore_ConcurrentAccess(t *testing.T) {
 	if len(list) != 20 {
 		t.Errorf("got %d jobs, want 20", len(list))
 	}
+}
+// Two processes on one data directory would rebuild independent in-memory
+// indexes and overwrite job.json behind each other's backs — silent corruption
+// where every individual write succeeds. The classic cause is a second
+// `make run` in another terminal, and it has to fail at startup with a clear
+// message, not corrupt quietly. flock scopes per open file description, so a
+// second open in the same process conflicts too, which is what makes this
+// testable without spawning a child.
+func TestStore_SecondOpenOfTheSameDataDirIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	first, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := New(dir); err == nil {
+		t.Fatal("a second store opened the same data dir")
+	} else if !strings.Contains(err.Error(), "already in use") {
+		t.Errorf("error %q should say the dir is in use and how to fix it", err)
+	}
+
+	// Close hands the directory over; a successor must be able to start.
+	first.Close()
+	second, err := New(dir)
+	if err != nil {
+		t.Fatalf("reopen after Close: %v", err)
+	}
+	second.Close()
 }

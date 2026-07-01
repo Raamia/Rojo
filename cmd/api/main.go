@@ -42,6 +42,9 @@ func main() {
 		logger.Error("open data dir", "path", cfg.DataDir, "err", err)
 		os.Exit(1)
 	}
+	// Released on the graceful path; on any other exit the kernel releases the
+	// flock when the process dies, so a crash never wedges the next start.
+	defer store.Close()
 	var repo jobs.JobRepository = store
 	logger.Info("data dir opened", "path", cfg.DataDir, "jobs_loaded", store.Loaded())
 
