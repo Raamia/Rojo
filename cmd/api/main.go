@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Raamia/Rojo/internal/agents/implementor"
 	"github.com/Raamia/Rojo/internal/agents/model"
 	"github.com/Raamia/Rojo/internal/agents/planner"
 	"github.com/Raamia/Rojo/internal/api"
@@ -85,15 +86,17 @@ func main() {
 	// pipeline still does useful work — isolate, verify, report — it just does
 	// not plan, so an unset key degrades the service rather than breaking it.
 	if cfg.AnthropicAPIKey != "" {
-		processor.Planner = planner.NewPlanner(model.NewAnthropicClient(model.AnthropicOptions{
+		modelClient := model.NewAnthropicClient(model.AnthropicOptions{
 			APIKey:  cfg.AnthropicAPIKey,
 			Model:   cfg.ModelID,
 			Timeout: cfg.JobTimeout,
-		}))
+		})
+		processor.Planner = planner.NewPlanner(modelClient)
 		processor.Context = repocontext.NewSelector(gitRunner)
-		logger.Info("planner enabled", "model", modelName(cfg.ModelID))
+		processor.Implementor = implementor.NewAgent(modelClient)
+		logger.Info("planner and implementor enabled", "model", modelName(cfg.ModelID))
 	} else {
-		logger.Warn("ANTHROPIC_API_KEY not set: the planning step is disabled")
+		logger.Warn("ANTHROPIC_API_KEY not set: planning and implementation are disabled")
 	}
 	processor.JobTimeout = cfg.JobTimeout
 	processor.Variants = cfg.FanoutVariants

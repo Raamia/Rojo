@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/Raamia/Rojo/internal/agents/implementor"
 	"github.com/Raamia/Rojo/internal/agents/planner"
 	"github.com/Raamia/Rojo/internal/events"
 	"github.com/Raamia/Rojo/internal/jobs"
@@ -26,6 +27,12 @@ type Verifier interface {
 // consumer, so the processor can be tested without calling a model.
 type Planner interface {
 	Plan(ctx context.Context, req planner.Request) (planner.Plan, error)
+}
+
+// Implementor proposes the file operations that carry out a plan. Declared
+// here, near its consumer, so the processor can be tested without a model.
+type Implementor interface {
+	Propose(ctx context.Context, req implementor.Request) ([]implementor.Operation, error)
 }
 
 // ContextSelector picks the files worth showing the planner. Optional: with
@@ -49,6 +56,9 @@ type Processor struct {
 	Planner Planner
 	// Context is optional and only consulted when a Planner is set.
 	Context ContextSelector
+	// Implementor is optional and only runs when there is both a plan to carry
+	// out and a workspace to carry it out in.
+	Implementor Implementor
 	// Variants is how many independent attempts each job gets. 1 (the default)
 	// runs a job once. Higher values fan the job out across that many isolated
 	// checkouts, verify them all, and keep the first that passes.
@@ -123,8 +133,10 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 	// still gets cleaned up.
 	// The plan is produced by the planning step and consumed by the steps after
 	// it; it is declared here so it outlives one loop iteration.
-	var plan planner.Plan
-	_ = plan // consumed by the implementor once that is wired in
+	var (
+		plan         planner.Plan
+		contextFiles []string
+	)
 
 	var cands []*candidate
 	defer func() {
@@ -187,6 +199,7 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 					log.Warn("select repo context", "err", ctxErr)
 				} else {
 					req.Files = sel.Files
+					contextFiles = sel.Files
 					log.Info("repo context selected",
 						"files", len(sel.Files), "tracked", sel.TotalTracked, "keywords", sel.Keywords)
 				}
@@ -218,6 +231,12 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 					"path":    c.ws.Path,
 					"branch":  c.ws.Branch,
 				})
+			}
+		}
+
+		if next == jobs.StatusImplementing && p.Implementor != nil && len(cands) > 0 {
+			if err := p.implement(jobCtx, log, jobID, job, plan, contextFiles, cands); err != nil {
+				return p.markFailed(job, err)
 			}
 		}
 
@@ -290,6 +309,69 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 	p.emit(jobCtx, jobID, events.TypeStepCompleted, map[string]any{"status": string(jobs.StatusCompleted)})
 	p.emit(jobCtx, jobID, events.TypeJobCompleted, nil)
 	return nil
+}
+
+// implement asks the model for changes and writes them into every candidate
+// worktree.
+//
+// Each variant gets its own proposal, which is what makes fan-out meaningful:
+// the same task attempted several ways produces genuinely different patches,
+// and the verification gate picks between them on evidence.
+//
+// A variant whose proposal fails is left unmodified and marked so it cannot
+// win; the job only fails if no variant could be implemented at all. One
+// unlucky sample must not sink the whole attempt.
+func (p *Processor) implement(
+	ctx context.Context, log *slog.Logger, jobID string, job *jobs.Job,
+	plan planner.Plan, contextFiles []string, cands []*candidate,
+) error {
+	var lastErr error
+	implemented := 0
+
+	for _, c := range cands {
+		if c.ws == nil {
+			continue
+		}
+		req := implementor.Request{
+			Task:  job.Task,
+			Plan:  plan,
+			Files: readSources(c.ws.Path, contextFiles),
+		}
+		ops, err := p.Implementor.Propose(ctx, req)
+		if err != nil {
+			c.err = fmt.Errorf("propose changes: %w", err)
+			lastErr = c.err
+			log.Warn("implementor proposal failed", "variant", c.index, "err", err)
+			continue
+		}
+		if err := implementor.New(c.ws.Path).Apply(ops); err != nil {
+			c.err = fmt.Errorf("apply changes: %w", err)
+			lastErr = c.err
+			log.Warn("applying changes failed", "variant", c.index, "err", err)
+			continue
+		}
+
+		implemented++
+		log.Info("changes applied", "variant", c.index, "operations", len(ops))
+		p.emit(ctx, jobID, events.TypeImplementationCompleted, map[string]any{
+			"variant":    c.index,
+			"operations": len(ops),
+			"paths":      pathsOf(ops),
+		})
+	}
+
+	if implemented == 0 {
+		return fmt.Errorf("no variant could be implemented: %w", lastErr)
+	}
+	return nil
+}
+
+func pathsOf(ops []implementor.Operation) []string {
+	out := make([]string, 0, len(ops))
+	for _, op := range ops {
+		out = append(out, op.Path)
+	}
+	return out
 }
 
 // endInterrupted decides how a job that stopped early should end.

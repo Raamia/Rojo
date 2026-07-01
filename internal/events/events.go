@@ -22,10 +22,11 @@ const (
 	TypeStepStarted   = "step.started"
 	TypeStepCompleted = "step.completed"
 
-	TypePlanCreated           = "plan.created"
-	TypeWorkspaceCreated      = "workspace.created"
-	TypeVerificationCompleted = "verification.completed"
-	TypeFanoutCompleted       = "fanout.completed"
+	TypePlanCreated             = "plan.created"
+	TypeWorkspaceCreated        = "workspace.created"
+	TypeImplementationCompleted = "implementation.completed"
+	TypeVerificationCompleted   = "verification.completed"
+	TypeFanoutCompleted         = "fanout.completed"
 )
 
 type Subscription struct {
