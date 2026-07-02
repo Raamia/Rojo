@@ -66,7 +66,7 @@ func (r *Reviewer) Review(ctx context.Context, req Request) (Review, error) {
 		return Review{}, fmt.Errorf("model call: %w", err)
 	}
 	var review Review
-	if err := json.Unmarshal([]byte(resp.Text), &review); err != nil {
+	if err := json.Unmarshal([]byte(model.Unfence(resp.Text)), &review); err != nil {
 		return Review{}, fmt.Errorf("%w: %v", ErrInvalidDecision, err)
 	}
 	switch review.Decision {

@@ -86,7 +86,7 @@ func (a *Agent) Propose(ctx context.Context, req Request) ([]Operation, error) {
 	var out struct {
 		Operations []Operation `json:"operations"`
 	}
-	if err := json.Unmarshal([]byte(unfence(resp.Text)), &out); err != nil {
+	if err := json.Unmarshal([]byte(model.Unfence(resp.Text)), &out); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidOperations, err)
 	}
 	if len(out.Operations) == 0 {
@@ -104,22 +104,4 @@ func (a *Agent) Propose(ctx context.Context, req Request) ([]Operation, error) {
 		}
 	}
 	return out.Operations, nil
-}
-
-// unfence strips a markdown code fence from around a JSON body. Models wrap
-// output in ```json even when told not to; that is a formatting habit rather
-// than a bad proposal, and failing a job over punctuation would reject good
-// work. Anything still invalid after unwrapping is rejected as before.
-func unfence(s string) string {
-	s = strings.TrimSpace(s)
-	if !strings.HasPrefix(s, "```") {
-		return s
-	}
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		s = s[i+1:]
-	}
-	if i := strings.LastIndex(s, "```"); i >= 0 {
-		s = s[:i]
-	}
-	return strings.TrimSpace(s)
 }

@@ -137,3 +137,41 @@ func (s *spyClient) Generate(_ context.Context, _ model.Request) (model.Response
 	s.calls++
 	return model.Response{Text: s.reply, Model: "spy"}, nil
 }
+
+// The reviewer was the one agent that did not unwrap a fenced reply, and it is
+// the worst place to lack it: the reviewer runs last, so a model wrapping its
+// answer in ```json discarded a completed plan, implementation and
+// verification — the most expensive possible moment to fail over punctuation.
+func TestReview_AcceptsFencedJSON(t *testing.T) {
+	body := `{"decision":"approve","notes":"looks right"}`
+	for name, reply := range map[string]string{
+		"fenced":     "```\n" + body + "\n```",
+		"tagged":     "```json\n" + body + "\n```",
+		"whitespace": "  ```json\n" + body + "\n```  ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := New(&model.FakeClient{Reply: reply})
+			got, err := r.Review(context.Background(), passingRequest())
+			if err != nil {
+				t.Fatalf("review: %v", err)
+			}
+			if got.Decision != DecisionApprove {
+				t.Errorf("decision = %q, want approve", got.Decision)
+			}
+			if got.Notes != "looks right" {
+				t.Errorf("notes = %q", got.Notes)
+			}
+		})
+	}
+}
+
+// passingRequest is a review request whose checks passed, so Review reaches the
+// model instead of short-circuiting on the deterministic gate.
+func passingRequest() Request {
+	return Request{
+		Task: "add a greeting",
+		Verification: verification.Report{
+			Results: []verification.Result{{Check: "go test", Passed: true}},
+		},
+	}
+}
