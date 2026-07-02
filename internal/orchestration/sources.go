@@ -6,14 +6,24 @@ import (
 	"strings"
 
 	"github.com/Raamia/Rojo/internal/agents/implementor"
+	"github.com/Raamia/Rojo/internal/repocontext"
 )
 
 // Bounds on how much source is sent to the model. Every byte here is paid for
 // on each attempt, and a fan-out multiplies that by the variant count.
+//
+// The file count matches repocontext.DefaultMaxFiles on purpose: the selector
+// ranks up to that many files as worth showing, and a lower cap here silently
+// discarded the tail of its ranking — the two limits drifting apart meant the
+// planner and the implementor were shown different repositories. The byte
+// ceiling works out to roughly 100k tokens of source per attempt, which at
+// Opus input pricing is about fifty cents a variant: enough context to edit a
+// real package, expensive enough that raising it should be a decision, not a
+// drift.
 const (
-	maxSourceFiles     = 25
+	maxSourceFiles     = repocontext.DefaultMaxFiles
 	maxSourceFileBytes = 64 << 10  // skip anything larger; it is generated or vendored
-	maxSourceTotalByte = 256 << 10 // hard ceiling across all files
+	maxSourceTotalByte = 384 << 10 // hard ceiling across all files
 )
 
 // readSources loads the selected files out of the job's worktree.
