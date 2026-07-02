@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -262,6 +263,49 @@ func TestStore_Artifacts(t *testing.T) {
 	onDisk := filepath.Join(dir, jobsDir, "j1", "diff.patch")
 	if _, err := os.Stat(onDisk); err != nil {
 		t.Errorf("artifact should be a plain file at %s: %v", onDisk, err)
+	}
+}
+
+// The API distinguishes "this job produced no patch yet" from "reading it
+// failed" by testing errors.Is(err, fs.ErrNotExist). That branch is only
+// correct if a missing artifact actually reports itself that way, so the
+// contract is pinned here rather than left to os.ReadFile's implementation.
+func TestStore_MissingArtifactIsNotExist(t *testing.T) {
+	s, _ := newStore(t)
+
+	for _, tt := range []struct{ name, job, artifact string }{
+		{"no artifact for a known job", "j1", "patch.diff"},
+		{"no job at all", "00000000000000000000000000000000", "patch.diff"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := s.WriteArtifact("j1", "other.txt", []byte("x")); err != nil {
+				t.Fatal(err)
+			}
+			_, err := s.ReadArtifact(tt.job, tt.artifact)
+			if !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("got %v, want an fs.ErrNotExist-compatible error", err)
+			}
+		})
+	}
+}
+
+// A patch is the largest thing a job produces and the one most likely to be
+// round-tripped wrong. Bytes in must equal bytes out, including the trailing
+// newline git needs for `git apply` to accept the last hunk.
+func TestStore_ArtifactRoundTripsExactly(t *testing.T) {
+	s, _ := newStore(t)
+	patch := "diff --git a/greet.go b/greet.go\nnew file mode 100644\n" +
+		"--- /dev/null\n+++ b/greet.go\n@@ -0,0 +1 @@\n+package main\n"
+
+	if err := s.WriteArtifact("j1", "patch.diff", []byte(patch)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ReadArtifact("j1", "patch.diff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != patch {
+		t.Errorf("round trip altered the patch:\n got %q\nwant %q", got, patch)
 	}
 }
 

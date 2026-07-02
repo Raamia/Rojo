@@ -41,6 +41,99 @@ func TestGitWorkspaceManager_DiffShowsChanges(t *testing.T) {
 	}
 }
 
+// Creating a file is the implementor's most common output, and `git diff HEAD`
+// says nothing about a path the index has never heard of. Without this the
+// patch for a job that added a file would come back empty, and the job would
+// report having changed nothing while sitting on real work.
+func TestGitWorkspaceManager_DiffIncludesNewFiles(t *testing.T) {
+	hasGit(t)
+	repo := initTestRepo(t)
+	m := NewGitWorkspaceManager(execution.NewExecRunner(), t.TempDir())
+
+	ws, err := m.Create(context.Background(), "newfile-job", repo)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer m.Cleanup(context.Background(), ws)
+
+	body := "package main\n\nfunc Greet() string { return \"hi\" }\n"
+	if err := os.WriteFile(filepath.Join(ws.Path, "greet.go"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	diff, err := m.Diff(context.Background(), ws)
+	if err != nil {
+		t.Fatalf("diff: %v", err)
+	}
+	for _, want := range []string{"greet.go", "new file mode", "+func Greet()"} {
+		if !contains(diff, want) {
+			t.Errorf("diff missing %q:\n%s", want, diff)
+		}
+	}
+}
+
+// A file in a new subdirectory has to be picked up too — that is how most real
+// changes land, and a recursive add is what makes it work.
+func TestGitWorkspaceManager_DiffIncludesNestedNewFiles(t *testing.T) {
+	hasGit(t)
+	repo := initTestRepo(t)
+	m := NewGitWorkspaceManager(execution.NewExecRunner(), t.TempDir())
+
+	ws, err := m.Create(context.Background(), "nested-job", repo)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer m.Cleanup(context.Background(), ws)
+
+	dir := filepath.Join(ws.Path, "internal", "greet")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "greet.go"), []byte("package greet\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	diff, err := m.Diff(context.Background(), ws)
+	if err != nil {
+		t.Fatalf("diff: %v", err)
+	}
+	if !contains(diff, "internal/greet/greet.go") {
+		t.Errorf("diff missing the nested file:\n%s", diff)
+	}
+}
+
+// Registering new files must not drag build output into the patch. .gitignore
+// is what draws that line, and `git add --all` honours it.
+func TestGitWorkspaceManager_DiffRespectsGitignore(t *testing.T) {
+	hasGit(t)
+	repo := initTestRepo(t)
+	m := NewGitWorkspaceManager(execution.NewExecRunner(), t.TempDir())
+
+	ws, err := m.Create(context.Background(), "ignore-job", repo)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer m.Cleanup(context.Background(), ws)
+
+	if err := os.WriteFile(filepath.Join(ws.Path, ".gitignore"), []byte("build/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws.Path, "build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Path, "build", "binary"), []byte("ELF-ish"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	diff, err := m.Diff(context.Background(), ws)
+	if err != nil {
+		t.Fatalf("diff: %v", err)
+	}
+	if contains(diff, "build/binary") {
+		t.Errorf("ignored build output leaked into the patch:\n%s", diff)
+	}
+}
+
 func TestGitWorkspaceManager_DiffCleanWorktreeIsEmpty(t *testing.T) {
 	hasGit(t)
 	repo := initTestRepo(t)

@@ -59,6 +59,9 @@ type Processor struct {
 	// Implementor is optional and only runs when there is both a plan to carry
 	// out and a workspace to carry it out in.
 	Implementor Implementor
+	// Artifacts is optional. Without it a job still runs and still reports its
+	// status, but the patch it produced is discarded with the worktree.
+	Artifacts ArtifactStore
 	// Variants is how many independent attempts each job gets. 1 (the default)
 	// runs a job once. Higher values fan the job out across that many isolated
 	// checkouts, verify them all, and keep the first that passes.
@@ -240,46 +243,19 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 			}
 		}
 
-		if next == jobs.StatusVerifying && p.Verifier != nil && len(cands) > 0 {
-			// Every attempt is checked, concurrently: the checks are the slow
-			// part and the attempts are independent, so one failing must not
-			// stop the others from being judged.
-			p.verifyCandidates(jobCtx, cands)
+		if next == jobs.StatusVerifying && len(cands) > 0 {
+			best, gateErr := p.verify(jobCtx, log, jobID, cands)
 
-			for _, c := range cands {
-				// Emitting each report persists it: PersistingBus writes event
-				// payloads to the events table, so results survive without a
-				// dedicated schema.
-				payload := map[string]any{
-					"variant": c.index,
-					"passed":  c.passed(),
-					"summary": c.report.Summary(),
-					"results": c.report.Results,
-				}
-				if c.err != nil {
-					payload["error"] = c.err.Error()
-				}
-				p.emit(jobCtx, jobID, events.TypeVerificationCompleted, payload)
-			}
+			// Capture before the gate is allowed to end the job, and before the
+			// deferred cleanup removes the worktree. A rejected attempt's diff
+			// is exactly what a human needs in order to see what went wrong, so
+			// a failed job still returns a patch — it just does not claim the
+			// patch is good.
+			p.captureDiff(jobCtx, log, jobID, best)
 
-			winner, ok := selectWinner(cands)
-			summary := summarise(cands, winner)
-			if len(cands) > 1 {
-				p.emit(jobCtx, jobID, events.TypeFanoutCompleted, map[string]any{
-					"total": summary.Total, "passed": summary.Passed,
-					"winner": summary.Winner, "results": summary.Results,
-				})
-				log.Info("fan-out complete", "total", summary.Total,
-					"passed", summary.Passed, "winner", summary.Winner)
+			if gateErr != nil {
+				return p.markFailed(job, gateErr)
 			}
-
-			// Deterministic checks outrank everything downstream: a job with no
-			// passing attempt must not reach completed. Once the reviewer exists
-			// this becomes a revision cycle rather than a terminal failure.
-			if !ok {
-				return p.markFailed(job, fanoutFailure(cands, summary))
-			}
-			log.Info("verification complete", "winner", winner.index, "summary", winner.report.Summary())
 		}
 
 		log.Info("step complete", "status", next)
@@ -364,6 +340,62 @@ func (p *Processor) implement(
 		return fmt.Errorf("no variant could be implemented: %w", lastErr)
 	}
 	return nil
+}
+
+// verify runs the deterministic gate and returns the attempt that represents
+// the job, along with the reason the job should fail if none of them passed.
+//
+// It always names an attempt, even when the gate rejected every one of them:
+// the caller still wants that attempt's diff saved, because "here is the patch
+// that failed the tests" is a far more useful failure report than "it failed".
+func (p *Processor) verify(
+	ctx context.Context, log *slog.Logger, jobID string, cands []*candidate,
+) (*candidate, error) {
+	if p.Verifier == nil {
+		// Nothing to check against, so the first attempt stands. Its diff is
+		// still worth keeping: the user asked for a change, not for a test run.
+		return cands[0], nil
+	}
+
+	// Every attempt is checked, concurrently: the checks are the slow part and
+	// the attempts are independent, so one failing must not stop the others
+	// from being judged.
+	p.verifyCandidates(ctx, cands)
+
+	for _, c := range cands {
+		// Emitting each report persists it: PersistingBus writes event payloads
+		// to the event log, so results survive without a dedicated schema.
+		payload := map[string]any{
+			"variant": c.index,
+			"passed":  c.passed(),
+			"summary": c.report.Summary(),
+			"results": c.report.Results,
+		}
+		if c.err != nil {
+			payload["error"] = c.err.Error()
+		}
+		p.emit(ctx, jobID, events.TypeVerificationCompleted, payload)
+	}
+
+	winner, ok := selectWinner(cands)
+	summary := summarise(cands, winner)
+	if len(cands) > 1 {
+		p.emit(ctx, jobID, events.TypeFanoutCompleted, map[string]any{
+			"total": summary.Total, "passed": summary.Passed,
+			"winner": summary.Winner, "results": summary.Results,
+		})
+		log.Info("fan-out complete", "total", summary.Total,
+			"passed", summary.Passed, "winner", summary.Winner)
+	}
+
+	// Deterministic checks outrank everything downstream: a job with no passing
+	// attempt must not reach completed. Once the reviewer exists this becomes a
+	// revision cycle rather than a terminal failure.
+	if !ok {
+		return cands[0], fanoutFailure(cands, summary)
+	}
+	log.Info("verification complete", "winner", winner.index, "summary", winner.report.Summary())
+	return winner, nil
 }
 
 func pathsOf(ops []implementor.Operation) []string {

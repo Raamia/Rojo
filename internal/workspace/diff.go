@@ -8,10 +8,32 @@ import (
 	"strings"
 )
 
+// Diff returns the worktree's changes against its base commit as a unified
+// patch, suitable for `git apply`.
+//
+// New files are registered with the index first. `git diff HEAD` only reports
+// paths git knows about, so without this an added file — the implementor's most
+// common output by far — produces an empty diff, and a job that did real work
+// reports having changed nothing. `--intent-to-add` records the path without
+// staging its content, which is the least the index needs in order to render
+// the file as an addition. `--all` still honours .gitignore, so build output and
+// vendored trees stay out of the patch.
 func (m *GitWorkspaceManager) Diff(ctx context.Context, ws *Workspace) (string, error) {
 	if ws == nil {
 		return "", ErrWorktreeNotFound
 	}
+
+	// A failure here is fatal rather than ignored: carrying on would produce a
+	// patch that silently omits every new file, and a plausible-looking
+	// incomplete patch is worse than a clear error.
+	add, err := m.runner.Run(ctx, ws.Path, "git", gitArgs("add", "--intent-to-add", "--all")...)
+	if err != nil {
+		return "", fmt.Errorf("git add --intent-to-add: %w: %s", err, add.Stderr)
+	}
+	if add.ExitCode != 0 {
+		return "", fmt.Errorf("git add --intent-to-add exited %d: %s", add.ExitCode, add.Stderr)
+	}
+
 	res, err := m.runner.Run(ctx, ws.Path, "git", gitArgs("diff", "HEAD")...)
 	if err != nil {
 		return "", fmt.Errorf("git diff: %w: %s", err, res.Stderr)

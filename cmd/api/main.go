@@ -81,6 +81,7 @@ func main() {
 	processor := orchestration.NewProcessor(repo, canceller, bus)
 	processor.Workspaces = workspaces
 	processor.Verifier = verifier
+	processor.Artifacts = store
 
 	// The planner only runs when a model is configured. Without a key the
 	// pipeline still does useful work — isolate, verify, report — it just does
@@ -144,6 +145,9 @@ func main() {
 
 	history := api.NewEventsHandler(store)
 	mux.HandleFunc("GET /api/v1/jobs/{jobID}/events", history.History)
+
+	diffs := api.NewDiffHandler(repo, store)
+	mux.HandleFunc("GET /api/v1/jobs/{jobID}/diff", diffs.Diff)
 
 	var handlerChain http.Handler = mux
 	handlerChain = api.LoggerMiddleware(logger)(handlerChain)

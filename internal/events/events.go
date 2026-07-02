@@ -27,6 +27,7 @@ const (
 	TypeImplementationCompleted = "implementation.completed"
 	TypeVerificationCompleted   = "verification.completed"
 	TypeFanoutCompleted         = "fanout.completed"
+	TypeDiffCaptured            = "diff.captured"
 )
 
 type Subscription struct {
