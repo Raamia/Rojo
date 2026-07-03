@@ -22,12 +22,32 @@ type candidate struct {
 	index  int
 	ws     *workspace.Workspace
 	report verification.Report
-	err    error
+	// err is why verification could not be run or completed.
+	err error
+	// implErr is why no change could be made to this checkout.
+	//
+	// It is kept apart from err because verification assigns err unconditionally
+	// and would erase an implementation failure. An attempt that was never
+	// modified would then be checked against a pristine tree, pass — of course
+	// it passes, it is the base commit — and win the job, which would report
+	// success while handing back an empty patch.
+	implErr error
 }
+
+// failure reports why this attempt is unusable, or nil if it is fine.
+func (c *candidate) failure() error {
+	if c.implErr != nil {
+		return c.implErr
+	}
+	return c.err
+}
+
+// implemented reports whether this attempt has changes worth checking.
+func (c *candidate) implemented() bool { return c.ws != nil && c.implErr == nil }
 
 // passed reports whether this attempt is a viable answer.
 func (c *candidate) passed() bool {
-	return c.err == nil && c.ws != nil && c.report.AllPassed()
+	return c.failure() == nil && c.ws != nil && c.report.AllPassed()
 }
 
 // variantID names the worktree for one attempt.
@@ -84,7 +104,9 @@ func (p *Processor) createCandidates(ctx context.Context, jobID, repoPath string
 func (p *Processor) verifyCandidates(ctx context.Context, cands []*candidate) {
 	var wg sync.WaitGroup
 	for _, c := range cands {
-		if c.ws == nil {
+		// An attempt with no changes has nothing to check. Running the gate
+		// against its untouched checkout would pass and make it look viable.
+		if !c.implemented() {
 			continue
 		}
 		wg.Add(1)
@@ -139,8 +161,8 @@ func fanoutFailure(cands []*candidate, summary fanoutSummary) error {
 	errs := []error{fmt.Errorf("no variant passed verification: %d of %d attempts failed",
 		summary.Total-summary.Passed, summary.Total)}
 	for _, c := range cands {
-		if c.err != nil {
-			errs = append(errs, fmt.Errorf("variant %d: %w", c.index, c.err))
+		if err := c.failure(); err != nil {
+			errs = append(errs, fmt.Errorf("variant %d: %w", c.index, err))
 		}
 	}
 	return errors.Join(errs...)
@@ -153,8 +175,8 @@ func summarise(cands []*candidate, winner *candidate) fanoutSummary {
 	}
 	for _, c := range cands {
 		out := variantOutcome{Variant: c.index, Passed: c.passed(), Summary: c.report.Summary()}
-		if c.err != nil {
-			out.Error = c.err.Error()
+		if err := c.failure(); err != nil {
+			out.Error = err.Error()
 		}
 		if out.Passed {
 			sum.Passed++
@@ -162,4 +184,19 @@ func summarise(cands []*candidate, winner *candidate) fanoutSummary {
 		sum.Results = append(sum.Results, out)
 	}
 	return sum
+}
+
+// representative picks the attempt that best stands for the job when no attempt
+// passed. An implemented one is preferred: its diff shows what was tried, where
+// an untouched checkout would only ever yield an empty patch.
+func representative(cands []*candidate) *candidate {
+	for _, c := range cands {
+		if c.implemented() {
+			return c
+		}
+	}
+	if len(cands) > 0 {
+		return cands[0]
+	}
+	return nil
 }

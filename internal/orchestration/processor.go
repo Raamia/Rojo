@@ -315,14 +315,14 @@ func (p *Processor) implement(
 		}
 		ops, err := p.Implementor.Propose(ctx, req)
 		if err != nil {
-			c.err = fmt.Errorf("propose changes: %w", err)
-			lastErr = c.err
+			c.implErr = fmt.Errorf("propose changes: %w", err)
+			lastErr = c.implErr
 			log.Warn("implementor proposal failed", "variant", c.index, "err", err)
 			continue
 		}
 		if err := implementor.New(c.ws.Path).Apply(ops); err != nil {
-			c.err = fmt.Errorf("apply changes: %w", err)
-			lastErr = c.err
+			c.implErr = fmt.Errorf("apply changes: %w", err)
+			lastErr = c.implErr
 			log.Warn("applying changes failed", "variant", c.index, "err", err)
 			continue
 		}
@@ -352,9 +352,9 @@ func (p *Processor) verify(
 	ctx context.Context, log *slog.Logger, jobID string, cands []*candidate,
 ) (*candidate, error) {
 	if p.Verifier == nil {
-		// Nothing to check against, so the first attempt stands. Its diff is
-		// still worth keeping: the user asked for a change, not for a test run.
-		return cands[0], nil
+		// Nothing to check against, so the first usable attempt stands. Its diff
+		// is still worth keeping: the user asked for a change, not a test run.
+		return representative(cands), nil
 	}
 
 	// Every attempt is checked, concurrently: the checks are the slow part and
@@ -371,8 +371,8 @@ func (p *Processor) verify(
 			"summary": c.report.Summary(),
 			"results": c.report.Results,
 		}
-		if c.err != nil {
-			payload["error"] = c.err.Error()
+		if err := c.failure(); err != nil {
+			payload["error"] = err.Error()
 		}
 		p.emit(ctx, jobID, events.TypeVerificationCompleted, payload)
 	}
@@ -392,7 +392,10 @@ func (p *Processor) verify(
 	// attempt must not reach completed. Once the reviewer exists this becomes a
 	// revision cycle rather than a terminal failure.
 	if !ok {
-		return cands[0], fanoutFailure(cands, summary)
+		// Nothing passed, but the closest attempt is still named so its diff is
+		// saved with the failure — a patch that failed the checks is what a
+		// human reads to find out why.
+		return representative(cands), fanoutFailure(cands, summary)
 	}
 	log.Info("verification complete", "winner", winner.index, "summary", winner.report.Summary())
 	return winner, nil

@@ -472,3 +472,34 @@ func TestCaptureDiff_ArtifactIsApplyable(t *testing.T) {
 		t.Errorf("applied file = %q", got)
 	}
 }
+
+// A variant whose proposal failed was never modified. Verifying it means
+// running the checks against a pristine checkout, which of course passes — and
+// if it can then win, the job reports success while handing back nothing.
+func TestVerify_UnimplementedVariantCannotWin(t *testing.T) {
+	repo := jobs.NewInMemoryRepository()
+	arts := newArtifacts()
+
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
+	p.Workspaces = &diffingWorkspaces{
+		base: t.TempDir(),
+		// Variant 0 is never implemented, so its worktree is unchanged.
+		diffs: map[int]string{0: "", 1: sampleDiff("real work"), 2: sampleDiff("real work")},
+	}
+	p.Verifier = &alwaysPass{} // a pristine checkout passes too
+	p.Artifacts = arts
+	p.Variants = 3
+	p.Implementor = &fakeImplementor{
+		ops:    []implementor.Operation{writeOp("greet.go", "package main\n")},
+		failOn: 1, // variant 0's proposal fails
+	}
+	newQueuedJob(t, repo, "unimpl")
+
+	if err := p.Process(context.Background(), "unimpl"); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	got, ok := arts.get("unimpl", ArtifactDiff)
+	if !ok || !strings.Contains(got, "real work") {
+		t.Errorf("job completed with patch %q; an unimplemented variant won", got)
+	}
+}
