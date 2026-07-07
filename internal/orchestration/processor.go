@@ -62,6 +62,9 @@ type Processor struct {
 	// Artifacts is optional. Without it a job still runs and still reports its
 	// status, but the patch it produced is discarded with the worktree.
 	Artifacts ArtifactStore
+	// Reviewer is optional. Without one a change that passes the deterministic
+	// gate is approved on that evidence alone.
+	Reviewer Reviewer
 	// Variants is how many independent attempts each job gets. 1 (the default)
 	// runs a job once. Higher values fan the job out across that many isolated
 	// checkouts, verify them all, and keep the first that passes.
@@ -166,6 +169,12 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 
 	// Work steps up to (but not including) the terminal completion. Each is
 	// followed by a cancellation checkpoint.
+	//
+	// This is a work list rather than a fixed sequence because a revision
+	// appends another pass to it: reviewing a change may conclude that it needs
+	// redoing, which sends the job back through implement, verify and review.
+	// The state machine validates every transition, so an impossible sequence
+	// fails loudly instead of quietly running the wrong step.
 	steps := []jobs.JobStatus{
 		jobs.StatusPlanning,
 		jobs.StatusPreparingWorkspace,
@@ -174,7 +183,16 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 		jobs.StatusReviewing,
 	}
 
-	for _, next := range steps {
+	// State carried between passes: what the gate concluded, and what the
+	// previous round was told to fix.
+	var (
+		gateErr   error
+		feedback  string
+		revisions int
+	)
+
+	for i := 0; i < len(steps); i++ {
+		next := steps[i]
 		if err := jobCtx.Err(); err != nil {
 			return p.endInterrupted(job, err)
 		}
@@ -238,23 +256,51 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 		}
 
 		if next == jobs.StatusImplementing && p.Implementor != nil && len(cands) > 0 {
-			if err := p.implement(jobCtx, log, jobID, job, plan, contextFiles, cands); err != nil {
+			if err := p.implement(jobCtx, log, jobID, job, plan, contextFiles, cands, feedback); err != nil {
 				return p.markFailed(job, err)
 			}
 		}
 
 		if next == jobs.StatusVerifying && len(cands) > 0 {
-			best, gateErr := p.verify(jobCtx, log, jobID, cands)
+			var best *candidate
+			best, gateErr = p.verify(jobCtx, log, jobID, cands)
 
-			// Capture before the gate is allowed to end the job, and before the
-			// deferred cleanup removes the worktree. A rejected attempt's diff
-			// is exactly what a human needs in order to see what went wrong, so
-			// a failed job still returns a patch — it just does not claim the
-			// patch is good.
+			// Capture before the deferred cleanup removes the worktree, and
+			// before the reviewing step is allowed to end the job. A rejected
+			// attempt's diff is exactly what a human needs in order to see what
+			// went wrong, so a failed job still returns a patch — it just does
+			// not claim the patch is good.
 			p.captureDiff(jobCtx, log, jobID, best)
+		}
 
-			if gateErr != nil {
-				return p.markFailed(job, gateErr)
+		if next == jobs.StatusReviewing && len(cands) > 0 {
+			// A revision is only worth attempting when something can actually
+			// change between passes. With no implementor the second attempt
+			// would be byte-for-byte the first, so the job fails now rather
+			// than after spending another full verification run proving it.
+			canRevise := p.Implementor != nil && revisions < MaxRevisions
+
+			decision, notes, err := p.review(jobCtx, log, jobID, reviewInput{
+				task: job.Task, plan: plan, best: representative(cands),
+				gateErr: gateErr, feedback: feedback, canRevise: canRevise,
+			})
+			switch {
+			case err != nil:
+				return p.markFailed(job, err)
+			case decision == outcomeRevise:
+				revisions++
+				feedback = notes
+				gateErr = nil
+				log.Info("revision requested", "attempt", revisions, "notes", notes)
+				p.emit(jobCtx, jobID, events.TypeRevisionRequested, map[string]any{
+					"attempt": revisions, "notes": notes,
+				})
+				steps = append(steps,
+					jobs.StatusWaitingForRevision,
+					jobs.StatusImplementing,
+					jobs.StatusVerifying,
+					jobs.StatusReviewing,
+				)
 			}
 		}
 
@@ -273,6 +319,14 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 	// transition and return a misleading error for a job that actually finished.
 	if err := jobCtx.Err(); err != nil {
 		return p.endInterrupted(job, err)
+	}
+	// Deterministic checks outrank every judgement made above this line. The
+	// reviewing step is supposed to have failed the job already if the gate did
+	// not pass, so reaching here with gateErr set means a bug in that logic —
+	// and the failure mode of such a bug is a job claiming success for a change
+	// that does not build, which is the one outcome worth an extra guard.
+	if gateErr != nil {
+		return p.markFailed(job, gateErr)
 	}
 	p.emit(jobCtx, jobID, events.TypeStepStarted, map[string]any{"status": string(jobs.StatusCompleted)})
 	if err := job.Transition(jobs.StatusCompleted); err != nil {
@@ -299,7 +353,7 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 // unlucky sample must not sink the whole attempt.
 func (p *Processor) implement(
 	ctx context.Context, log *slog.Logger, jobID string, job *jobs.Job,
-	plan planner.Plan, contextFiles []string, cands []*candidate,
+	plan planner.Plan, contextFiles []string, cands []*candidate, feedback string,
 ) error {
 	var lastErr error
 	implemented := 0
@@ -308,10 +362,21 @@ func (p *Processor) implement(
 		if c.ws == nil {
 			continue
 		}
+		// On a revision, attempts that already failed to produce anything stay
+		// dead. The feedback describes a diff they never made, so handing it to
+		// them would ask for a correction to work that does not exist.
+		if feedback != "" && c.implErr != nil {
+			continue
+		}
 		req := implementor.Request{
-			Task:  job.Task,
-			Plan:  plan,
-			Files: readSources(c.ws.Path, contextFiles),
+			Task: job.Task,
+			Plan: plan,
+			// The files it touched last round are included alongside the
+			// planner's selection: a revision has to see the code it is being
+			// asked to correct, and a file it created is in neither the
+			// original selection nor the source repository.
+			Files:    readSources(c.ws.Path, mergePaths(contextFiles, c.touched)),
+			Feedback: feedback,
 		}
 		ops, err := p.Implementor.Propose(ctx, req)
 		if err != nil {
@@ -328,6 +393,7 @@ func (p *Processor) implement(
 		}
 
 		implemented++
+		c.touched = mergePaths(c.touched, pathsOf(ops))
 		log.Info("changes applied", "variant", c.index, "operations", len(ops))
 		p.emit(ctx, jobID, events.TypeImplementationCompleted, map[string]any{
 			"variant":    c.index,
@@ -399,6 +465,23 @@ func (p *Processor) verify(
 	}
 	log.Info("verification complete", "winner", winner.index, "summary", winner.report.Summary())
 	return winner, nil
+}
+
+// mergePaths unions two path lists, preserving order and dropping duplicates.
+// It always allocates: appending to a caller's slice in a loop would let one
+// variant's writes reach into another's backing array.
+func mergePaths(a, b []string) []string {
+	out := make([]string, 0, len(a)+len(b))
+	seen := make(map[string]bool, len(a)+len(b))
+	for _, list := range [][]string{a, b} {
+		for _, p := range list {
+			if p != "" && !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	return out
 }
 
 func pathsOf(ops []implementor.Operation) []string {

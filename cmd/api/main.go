@@ -13,6 +13,7 @@ import (
 	"github.com/Raamia/Rojo/internal/agents/implementor"
 	"github.com/Raamia/Rojo/internal/agents/model"
 	"github.com/Raamia/Rojo/internal/agents/planner"
+	"github.com/Raamia/Rojo/internal/agents/reviewer"
 	"github.com/Raamia/Rojo/internal/api"
 	"github.com/Raamia/Rojo/internal/config"
 	"github.com/Raamia/Rojo/internal/events"
@@ -95,9 +96,11 @@ func main() {
 		processor.Planner = planner.NewPlanner(modelClient)
 		processor.Context = repocontext.NewSelector(gitRunner)
 		processor.Implementor = implementor.NewAgent(modelClient)
-		logger.Info("planner and implementor enabled", "model", modelName(cfg.ModelID))
+		processor.Reviewer = reviewer.New(modelClient)
+		logger.Info("agents enabled", "model", modelName(cfg.ModelID),
+			"max_revisions", orchestration.MaxRevisions)
 	} else {
-		logger.Warn("ANTHROPIC_API_KEY not set: planning and implementation are disabled")
+		logger.Warn("ANTHROPIC_API_KEY not set: planning, implementation and review are disabled")
 	}
 	processor.JobTimeout = cfg.JobTimeout
 	processor.Variants = cfg.FanoutVariants

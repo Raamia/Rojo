@@ -32,6 +32,9 @@ type candidate struct {
 	// it passes, it is the base commit — and win the job, which would report
 	// success while handing back an empty patch.
 	implErr error
+	// touched is the set of paths this attempt has written, so a revision can
+	// be shown the code it is being asked to correct.
+	touched []string
 }
 
 // failure reports why this attempt is unusable, or nil if it is fine.

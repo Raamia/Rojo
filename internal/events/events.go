@@ -28,6 +28,9 @@ const (
 	TypeVerificationCompleted   = "verification.completed"
 	TypeFanoutCompleted         = "fanout.completed"
 	TypeDiffCaptured            = "diff.captured"
+	TypeReviewStarted           = "review.started"
+	TypeReviewCompleted         = "review.completed"
+	TypeRevisionRequested       = "revision.requested"
 )
 
 type Subscription struct {
