@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"sync"
 
 	"github.com/Raamia/Rojo/internal/verification"
@@ -115,6 +117,18 @@ func (p *Processor) verifyCandidates(ctx context.Context, cands []*candidate) {
 		wg.Add(1)
 		go func(c *candidate) {
 			defer wg.Done()
+			// The verifier runs on its own goroutine, so Process's recovery
+			// cannot reach a panic raised here — an unrecovered panic on any
+			// goroutine ends the whole process, however well the caller is
+			// guarded. Catching it here keeps the blast radius to one attempt:
+			// this variant fails, the others are still judged.
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("panic verifying variant", "variant", c.index,
+						"panic", r, "stack", string(debug.Stack()))
+					c.err = fmt.Errorf("%w: verifying variant %d: %v", ErrPanic, c.index, r)
+				}
+			}()
 			report, err := p.Verifier.Verify(ctx, c.ws.Path)
 			c.report = report
 			c.err = err

@@ -49,6 +49,9 @@ func LoggerFrom(ctx context.Context) *slog.Logger {
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
+	// hijacked records that the connection was taken over, so the recovery
+	// middleware knows there is no response left to write into.
+	hijacked bool
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
@@ -66,7 +69,11 @@ func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	if !ok {
 		return nil, nil, fmt.Errorf("underlying ResponseWriter does not support hijacking")
 	}
-	return hj.Hijack()
+	conn, buf, err := hj.Hijack()
+	if err == nil {
+		r.hijacked = true
+	}
+	return conn, buf, err
 }
 
 // Flush forwards to the underlying ResponseWriter when it supports flushing, so

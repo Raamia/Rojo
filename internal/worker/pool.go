@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 
 	"github.com/Raamia/Rojo/internal/queue"
@@ -46,10 +47,30 @@ func (p *Pool) runWorker(ctx context.Context, id int) {
 				log.Info("queue closed, worker stopping")
 				return
 			}
-			if err := p.processor.Process(ctx, jobID); err != nil {
-				log.Error("process job", "job_id", jobID, "err", err)
-			}
+			p.process(ctx, log, jobID)
 		}
+	}
+}
+
+// process runs one job and survives whatever it does.
+//
+// Processor.Process already turns a panic into an ordinary job failure; this is
+// the backstop for anything that escapes it, including a panic raised inside
+// that recovery path. Without it an unrecovered panic unwinds through this
+// goroutine and takes the whole process down, killing every other in-flight job
+// and every worker — one malformed model response would end the service.
+//
+// The job may be left in a non-terminal state when the inner recovery is what
+// failed; startup recovery is what reconciles that.
+func (p *Pool) process(ctx context.Context, log *slog.Logger, jobID string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("worker recovered from panic", "job_id", jobID,
+				"panic", r, "stack", string(debug.Stack()))
+		}
+	}()
+	if err := p.processor.Process(ctx, jobID); err != nil {
+		log.Error("process job", "job_id", jobID, "err", err)
 	}
 }
 

@@ -123,3 +123,44 @@ func TestPool_ConcurrentEnqueueAndProcess(t *testing.T) {
 	}
 	t.Fatalf("got %d processed, want %d", p.count.Load(), producers*each)
 }
+
+// A panic that escapes the processor must not take the pool down with it. The
+// worker keeps running and picks up the next job.
+func TestPool_SurvivesAPanickingProcessor(t *testing.T) {
+	q := queue.New(8)
+	proc := &panickyProcessor{done: make(chan string, 8)}
+	pool := NewPool(1, q, proc)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool.Start(ctx)
+
+	for _, id := range []string{"panics", "fine"} {
+		if err := q.Enqueue(id); err != nil {
+			t.Fatalf("enqueue %s: %v", id, err)
+		}
+	}
+
+	// The second job proves the worker is still alive after the first blew up.
+	select {
+	case got := <-proc.done:
+		if got != "fine" {
+			t.Errorf("processed %q, want fine", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the worker died with the panicking job")
+	}
+
+	cancel()
+	pool.Wait()
+}
+
+type panickyProcessor struct{ done chan string }
+
+func (p *panickyProcessor) Process(_ context.Context, jobID string) error {
+	if jobID == "panics" {
+		panic("deliberate: nothing recovered this")
+	}
+	p.done <- jobID
+	return nil
+}

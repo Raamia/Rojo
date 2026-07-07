@@ -153,6 +153,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/jobs/{jobID}/diff", diffs.Diff)
 
 	var handlerChain http.Handler = mux
+	handlerChain = api.RecoverMiddleware()(handlerChain)
 	handlerChain = api.LoggerMiddleware(logger)(handlerChain)
 	handlerChain = api.NewRateLimiter(cfg.RateLimitBurst, cfg.RateLimitRPS).Middleware()(handlerChain)
 	if cfg.AuthToken != "" {

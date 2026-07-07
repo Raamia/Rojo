@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"time"
 
 	"github.com/Raamia/Rojo/internal/agents/implementor"
@@ -111,8 +112,34 @@ func (p *Processor) emit(ctx context.Context, jobID, eventType string, payload m
 	})
 }
 
-func (p *Processor) Process(ctx context.Context, jobID string) error {
+// ErrPanic marks a job that failed because a stage panicked.
+var ErrPanic = errors.New("panic while processing job")
+
+func (p *Processor) Process(ctx context.Context, jobID string) (err error) {
 	log := slog.With("job_id", jobID)
+
+	// A panic in any stage — a nil map from a malformed model response, a bad
+	// index, an unexpected type — would otherwise unwind through the worker
+	// goroutine and end the process, taking every other in-flight job with it.
+	// Recovering here turns it into an ordinary job failure instead: this job
+	// ends terminal, its worktree is removed by the cleanup deferred below
+	// (defers run last-in-first-out, so cleanup happens before this), and the
+	// rest of the service carries on.
+	var job *jobs.Job
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		log.Error("panic processing job", "panic", r, "stack", string(debug.Stack()))
+		cause := fmt.Errorf("%w: %v", ErrPanic, r)
+		if job == nil {
+			// The panic beat the job load, so there is no record to fail.
+			err = cause
+			return
+		}
+		err = p.markFailed(job, cause)
+	}()
 
 	// Two layers: an outer cancel the Canceller can fire on request, and an
 	// inner deadline. Cancelling the outer propagates inward, so the Canceller
@@ -160,7 +187,7 @@ func (p *Processor) Process(ctx context.Context, jobID string) error {
 		}
 	}()
 
-	job, err := p.Repo.Get(jobCtx, jobID)
+	job, err = p.Repo.Get(jobCtx, jobID)
 	if err != nil {
 		return fmt.Errorf("load job %s: %w", jobID, err)
 	}

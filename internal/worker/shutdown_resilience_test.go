@@ -238,48 +238,63 @@ func TestResilience_QueuedJobsAreLostOnRestartWithNoRecovery(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// FAILURE MODE 1/8 — one panicking job takes down the whole service
+// FAILURE MODE 1/8 — one panicking job must no longer take down the service
 // ---------------------------------------------------------------------------
 
-type resPanicProcessor struct{}
+// resPanicProcessor panics on the first job and reports the second, so the test
+// can tell "survived" from "survived but stopped working".
+type resPanicProcessor struct{ served chan string }
 
-func (resPanicProcessor) Process(context.Context, string) error {
-	panic("simulated panic inside a job step")
+func (p resPanicProcessor) Process(_ context.Context, jobID string) error {
+	if jobID == "boom" {
+		panic("simulated panic inside a job step")
+	}
+	p.served <- jobID
+	return nil
 }
 
-// runWorker (pool.go:36-54) calls processor.Process with no recover, and no
-// other layer wraps it either. A panic anywhere in the pipeline — including the
-// send-on-closed-channel panic in InProcessBus.Publish proven by
-// internal/events/persistence_resilience_test.go — therefore kills the entire
-// API process, dropping every other in-flight job and everything still buffered
-// in the queue.
+// This test used to assert the opposite: it proved that runWorker called
+// Process with no recover anywhere, so a panic in any stage killed the entire
+// API process and dropped every other in-flight and queued job. That is fixed —
+// Processor.Process, verifyCandidates and Pool.process each recover — and the
+// assertion is inverted to lock the fix in.
 //
-// Proven by re-executing this test binary as a child process: the child starts
-// a pool with a panicking processor and must die.
-func TestResilience_PanicInAJobCrashesTheEntireProcess(t *testing.T) {
+// A child process is the only honest way to check this. An unrecovered panic on
+// any goroutine terminates the program, so "did the process survive?" cannot be
+// answered from inside the process that would have died.
+func TestResilience_PanicInAJobDoesNotCrashTheProcess(t *testing.T) {
 	if os.Getenv("ROJO_RESILIENCE_PANIC_CHILD") == "1" {
-		q := queue.New(1)
-		pool := NewPool(1, q, resPanicProcessor{})
+		served := make(chan string, 1)
+		q := queue.New(2)
+		pool := NewPool(1, q, resPanicProcessor{served: served})
 		pool.Start(context.Background())
-		if err := q.Enqueue("boom"); err != nil {
-			panic("enqueue failed: " + err.Error())
+
+		for _, id := range []string{"boom", "healthy"} {
+			if err := q.Enqueue(id); err != nil {
+				panic("enqueue failed: " + err.Error())
+			}
 		}
-		time.Sleep(10 * time.Second) // the panic should kill us long before this
-		return
+		select {
+		case <-served:
+			os.Exit(0) // survived the panic and kept working
+		case <-time.After(10 * time.Second):
+			panic("the worker never processed the job after the panic")
+		}
 	}
 
 	cmd := exec.Command(os.Args[0],
-		"-test.run=^TestResilience_PanicInAJobCrashesTheEntireProcess$",
+		"-test.run=^TestResilience_PanicInAJobDoesNotCrashTheProcess$",
 		"-test.timeout=60s",
 	)
 	cmd.Env = append(os.Environ(), "ROJO_RESILIENCE_PANIC_CHILD=1")
 	out, err := cmd.CombinedOutput()
 
-	if err == nil {
-		t.Fatal("child process exited cleanly — the worker pool now recovers panics, re-baseline this test")
+	if err != nil {
+		t.Fatalf("a panicking job killed the process (exit: %v); every other in-flight and queued job dies with it. output:\n%s", err, out)
 	}
-	if !strings.Contains(string(out), "panic: simulated panic inside a job step") {
-		t.Fatalf("child died without the expected panic. exit=%v output:\n%s", err, out)
+	// Surviving silently would be worse than crashing: an operator needs to
+	// know a job blew up.
+	if !strings.Contains(string(out), "simulated panic inside a job step") {
+		t.Errorf("the panic was swallowed without a log:\n%s", out)
 	}
-	t.Logf("CONFIRMED: a panic in one job killed the whole process (exit: %v); every other in-flight and queued job dies with it", err)
 }
