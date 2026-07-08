@@ -1,0 +1,12 @@
+# Keep the build context to what the compiler actually needs. Everything here is
+# either regenerated in the image, irrelevant to a build, or local-only notes.
+.git
+.claude
+*.md
+!README.md
+rojo-data/
+worktrees/
+tests/
+Dockerfile
+.dockerignore
+.github

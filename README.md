@@ -27,12 +27,24 @@ restart out of the box.
 1. The job is validated, persisted and queued.
 2. If `ANTHROPIC_API_KEY` is set, the planner turns the task into a structured
    plan. Without a key this step is skipped and the rest still runs.
-3. A worker creates an isolated git worktree on a `rojo/job/<id>` branch, so the
-   original repository is never modified.
-4. Deterministic verification runs **inside that worktree**: `gofmt -l .`,
+3. A worker creates an isolated git worktree on a `rojo/job/<id>` branch. The
+   source repository's working tree and tracked files are never modified.
+4. If a key is set, the implementor proposes structured file operations and the
+   backend applies them inside the worktree — path-validated and sandboxed, so
+   a proposal cannot write outside it however convincing the model was.
+5. Deterministic verification runs **inside that worktree**: `gofmt -l .`,
    `go vet ./...`, `go test ./...`.
-5. If every check passes the job completes; if any fails the job ends `failed`
-   with a summary. Either way the worktree and its branch are removed.
+6. The reviewer judges whether the change did what was asked. It only ever sees
+   a change that already passed the checks — deterministic results outrank model
+   judgement, so a change that does not build is not something it gets an
+   opinion about.
+7. Approved jobs complete. A failing gate or a reviewer asking for changes sends
+   the job back through implement → verify → review **once**, with the failing
+   check output as the feedback, which is how a job fixes its own broken test.
+8. The winning patch is saved as an artifact, readable at
+   `GET /api/v1/jobs/{id}/diff`. A **failed** job keeps its patch too — the
+   change that failed the tests is what you read to find out why.
+9. Either way the worktree and its branch are removed.
 
 On startup Rojo reconciles the stored jobs with its empty queue: jobs still marked
 `queued` are re-enqueued, and jobs interrupted mid-flight by the previous
@@ -47,9 +59,6 @@ Every job is bounded by `ROJO_JOB_TIMEOUT`. A job that runs out of time ends
 `failed` (not `cancelled` — that is reserved for a caller asking it to stop) and
 still has its worktree reclaimed.
 
-The implementor and reviewer are still scaffolded but not part of this pipeline
-The known limitations are documented below.
-
 ## Configuration
 
 | Env var                    | Default                     | Description                       |
@@ -62,8 +71,8 @@ The known limitations are documented below.
 | `ROJO_SHUTDOWN_TIMEOUT`   | `15s`                       | Graceful shutdown deadline        |
 | `ROJO_JOB_TIMEOUT`        | `30m`                       | Maximum wall-clock time for one job |
 | `ROJO_FANOUT_VARIANTS`    | `1`                         | Attempts per job, each in its own worktree (max 8) |
-| `ANTHROPIC_API_KEY`       | *(unset → planning disabled)* | API key for the planner |
-| `ROJO_MODEL`              | `claude-opus-4-8`           | Model the planner uses |
+| `ANTHROPIC_API_KEY`       | *(unset → agents disabled)* | API key for the planner, implementor and reviewer |
+| `ROJO_MODEL`              | `claude-opus-4-8`           | Model the agents use |
 | `ROJO_AUTH_TOKEN`         | *(unset → **auth disabled**)* | Bearer token required on every route except `/healthz` |
 | `ROJO_RATE_LIMIT_BURST`   | `30`                        | Token-bucket capacity per client IP |
 | `ROJO_RATE_LIMIT_RPS`     | `5`                         | Token refill per second           |
@@ -81,11 +90,13 @@ log if a setting does not appear to take effect.
 | Method | Path                                | Description             |
 | ------ | ----------------------------------- | ----------------------- |
 | POST   | `/api/v1/jobs`                      | Create a job            |
-| GET    | `/api/v1/jobs`                      | List jobs               |
+| GET    | `/api/v1/jobs`                      | List jobs, newest first. `?limit=` (default 50, max 200) and `?offset=`; total in the `X-Total-Count` header |
 | GET    | `/api/v1/jobs/{jobID}`              | Get one job             |
 | POST   | `/api/v1/jobs/{jobID}/cancel`       | Cancel a running job    |
 | GET    | `/api/v1/jobs/{jobID}/events`       | Job event history |
+| GET    | `/api/v1/jobs/{jobID}/diff`         | The job's patch, as `text/x-diff` — pipe it into `git apply` |
 | GET    | `/api/v1/jobs/{jobID}/stream`       | Live event WebSocket    |
+| GET    | `/healthz`                          | Liveness. Probes that the data directory is actually writable; `503` when it is not |
 
 ## Storage
 
@@ -95,7 +106,7 @@ Everything lives under `ROJO_DATA_DIR`, one directory per job:
 rojo-data/jobs/<job-id>/
   job.json       current state
   events.jsonl   append-only event log
-  diff.patch     artifacts, when the job produces them
+  patch.diff     the job's patch, when it produced one
 ```
 
 Plain files on purpose — a patch you can `git apply`, a log you can `cat`, and
@@ -113,9 +124,36 @@ internal/orchestration  Processor + cancellation tracker
 internal/execution      CommandRunner with allowlist and timeouts
 internal/workspace      Git worktree manager
 internal/verification   Deterministic check runner (gofmt, go vet, go test)
-internal/agents         Model client, planner, implementor, reviewer (not yet wired)
-internal/events         Event bus + postgres store
+internal/agents         Model client, planner, implementor, reviewer
+internal/repocontext    Picks the files worth showing a model (git ls-files / git grep)
+internal/events         Event bus + persistence
 internal/storage/filestore  Durable job, event and artifact storage on disk
 tests                   End-to-end tests
 ```
+
+## Docker
+
+The image ships the Go toolchain and git, because that is what jobs run — a
+scratch or distroless image would build fine and then fail every verification.
+
+```bash
+make docker
+REPO=/absolute/path/to/your/repo make docker-run
+```
+
+The repository mount is **read-write**, and has to be: `git worktree add` writes
+a branch ref and an admin entry inside the source repository's `.git`. What Rojo
+never touches is the source working tree or its tracked files — every change
+lives in the worktree, and cleanup removes both the worktree and the branch.
+
+The repo is mounted at the same path inside the container as outside, so the
+`repo_path` in a job request means the same thing on both sides.
+
+## Development
+
+```bash
+make check   # the same gates CI runs: gofmt, go vet, go test -race
+```
+
+CI runs those on every push, plus `govulncheck` and a Docker image build.
 
