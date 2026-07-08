@@ -216,6 +216,11 @@ func (p *Processor) Process(ctx context.Context, jobID string) (err error) {
 		gateErr   error
 		feedback  string
 		revisions int
+		// winner is the attempt the job is returning. It has to outlive the
+		// verifying step: the reviewing step judges it, and re-deriving a
+		// candidate there would pick the first implemented one rather than the
+		// one that passed.
+		winner *candidate
 	)
 
 	for i := 0; i < len(steps); i++ {
@@ -286,15 +291,14 @@ func (p *Processor) Process(ctx context.Context, jobID string) (err error) {
 		}
 
 		if next == jobs.StatusVerifying && len(cands) > 0 {
-			var best *candidate
-			best, gateErr = p.verify(jobCtx, log, jobID, cands)
+			winner, gateErr = p.verify(jobCtx, log, jobID, cands)
 
 			// Capture before the deferred cleanup removes the worktree, and
 			// before the reviewing step is allowed to end the job. A rejected
 			// attempt's diff is exactly what a human needs in order to see what
 			// went wrong, so a failed job still returns a patch — it just does
 			// not claim the patch is good.
-			p.captureDiff(jobCtx, log, jobID, best)
+			p.captureDiff(jobCtx, log, jobID, winner)
 		}
 
 		if next == jobs.StatusReviewing && len(cands) > 0 {
@@ -305,7 +309,7 @@ func (p *Processor) Process(ctx context.Context, jobID string) (err error) {
 			canRevise := p.Implementor != nil && revisions < MaxRevisions
 
 			decision, notes, err := p.review(jobCtx, log, jobID, reviewInput{
-				task: job.Task, plan: plan, best: representative(cands),
+				task: job.Task, plan: plan, best: winner,
 				gateErr: gateErr, feedback: feedback, canRevise: canRevise,
 			})
 			switch {

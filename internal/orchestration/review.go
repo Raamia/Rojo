@@ -9,7 +9,6 @@ import (
 	"github.com/Raamia/Rojo/internal/agents/planner"
 	"github.com/Raamia/Rojo/internal/agents/reviewer"
 	"github.com/Raamia/Rojo/internal/events"
-	"github.com/Raamia/Rojo/internal/verification"
 )
 
 // Reviewer judges whether a change actually did what was asked. Declared here,
@@ -61,6 +60,14 @@ func (p *Processor) review(
 	best, gateErr, canRevise := in.best, in.gateErr, in.canRevise
 
 	if gateErr != nil {
+		// A gate that could not be *run* is not something a model can fix. The
+		// toolchain is missing, a command timed out, or a check panicked — and
+		// the candidate carries an empty report, so the feedback would read
+		// "all 0 checks passed" and quote no output at all. Spending a model
+		// call and a whole verification round on that only delays the failure.
+		if best != nil && best.err != nil && len(best.report.Results) == 0 {
+			return outcomeFail, "", fmt.Errorf("verification could not run: %w", best.failure())
+		}
 		if !canRevise {
 			return outcomeFail, "", gateErr
 		}
@@ -68,7 +75,7 @@ func (p *Processor) review(
 		// the failing test and the line. Handing it back is what lets the
 		// implementor correct itself rather than guess.
 		log.Info("gate failed; requesting a revision", "summary", best.report.Summary())
-		return outcomeRevise, gateFeedback(best.report), nil
+		return outcomeRevise, gateFeedback(best), nil
 	}
 
 	if p.Reviewer == nil {
@@ -133,14 +140,21 @@ func (p *Processor) diffOf(ctx context.Context, c *candidate) (string, error) {
 	return p.Workspaces.Diff(ctx, c.ws)
 }
 
-// gateFeedback turns a failed report into instructions the implementor can act
+// gateFeedback turns a failed attempt into instructions the implementor can act
 // on: which checks failed, and what they printed.
-func gateFeedback(r verification.Report) string {
+//
+// It reports the candidate's underlying failure too. A report can be empty
+// while the attempt still failed — a check that errored rather than returned
+// results — and quoting only the results would then claim everything passed.
+func gateFeedback(c *candidate) string {
 	var b strings.Builder
 	b.WriteString("The previous attempt failed verification: ")
-	b.WriteString(r.Summary())
+	b.WriteString(c.report.Summary())
+	if err := c.failure(); err != nil {
+		fmt.Fprintf(&b, "\nThe verifier reported: %s", err)
+	}
 	b.WriteString("\n\nFix the cause. Output from the failing checks:\n")
-	for _, res := range r.Results {
+	for _, res := range c.report.Results {
 		if res.Passed {
 			continue
 		}

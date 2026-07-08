@@ -438,3 +438,55 @@ func TestTruncate(t *testing.T) {
 		t.Error("truncation dropped the beginning, which is where the cause is")
 	}
 }
+
+// A gate that could not be *run* is not something a model can fix. The
+// toolchain is missing, or a check timed out — the report is empty, so feedback
+// built from it would read "all 0 checks passed" and quote no output, asking
+// the model to fix an infrastructure problem with no information. Failing now
+// beats spending a model call and a whole verification round to fail anyway.
+func TestReview_UnrunnableGateFailsWithoutARevision(t *testing.T) {
+	repo := jobs.NewInMemoryRepository()
+	p, impl := reviewProcessor(t, repo, events.NewInProcessBus())
+	boom := errors.New(`exec: "go": executable file not found in $PATH`)
+	p.Verifier = &erroringVerifier{err: boom}
+	rev := &fakeReviewer{decisions: []reviewer.Review{approve()}}
+	p.Reviewer = rev
+
+	newQueuedJob(t, repo, "notoolchain")
+
+	err := p.Process(context.Background(), "notoolchain")
+	if err == nil {
+		t.Fatal("expected the job to fail")
+	}
+	if !errors.Is(err, boom) {
+		t.Errorf("error %v should carry the real cause", err)
+	}
+	// The decisive part: no second attempt, and the model is never consulted.
+	if impl.count() != 1 {
+		t.Errorf("implementor ran %d times, want 1 — a revision cannot install a toolchain", impl.count())
+	}
+	if rev.calls() != 0 {
+		t.Errorf("the reviewer was consulted %d times about checks that never ran", rev.calls())
+	}
+	if got, _ := repo.Get(context.Background(), "notoolchain"); got.Status != jobs.StatusFailed {
+		t.Errorf("status = %q, want failed", got.Status)
+	}
+}
+
+type erroringVerifier struct{ err error }
+
+func (e *erroringVerifier) Verify(context.Context, string) (verification.Report, error) {
+	return verification.Report{}, e.err
+}
+
+// Feedback built from an empty report would tell the model everything passed.
+func TestGateFeedback_ReportsAVerifierThatCouldNotRun(t *testing.T) {
+	c := &candidate{index: 0, err: errors.New(`exec: "go": executable file not found`)}
+	got := gateFeedback(c)
+	if !strings.Contains(got, "executable file not found") {
+		t.Errorf("feedback hides why verification failed:\n%s", got)
+	}
+	if strings.Contains(got, "all 0 checks passed") && !strings.Contains(got, "verifier reported") {
+		t.Errorf("feedback claims the checks passed:\n%s", got)
+	}
+}

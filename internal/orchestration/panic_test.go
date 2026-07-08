@@ -22,7 +22,6 @@ func TestProcess_PanicBecomesAFailedJob(t *testing.T) {
 	stages := map[string]func(*Processor){
 		"planner":     func(p *Processor) { p.Planner = panicPlanner{} },
 		"implementor": func(p *Processor) { p.Implementor = panicImplementor{} },
-		"verifier":    func(p *Processor) { p.Verifier = panicVerifier{} },
 		"workspaces":  func(p *Processor) { p.Workspaces = panicWorkspaces{} },
 	}
 	for name, configure := range stages {
@@ -46,6 +45,29 @@ func TestProcess_PanicBecomesAFailedJob(t *testing.T) {
 				t.Errorf("status = %q, want failed — a panicked job must not linger", got.Status)
 			}
 		})
+	}
+}
+
+// A verifier panic is caught inside verifyCandidates, not by Process's
+// recover — it happens on a goroutine Process did not start. It is a separate
+// test because putting it in the table above claimed to exercise the top-level
+// handler while never reaching it: the subtest passed with that recover
+// deleted, which is the definition of a test that is not load-bearing.
+func TestProcess_VerifierPanicIsContainedToItsVariant(t *testing.T) {
+	repo := jobs.NewInMemoryRepository()
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
+	p.Workspaces = &diffingWorkspaces{base: t.TempDir(), diffs: map[int]string{0: sampleDiff("x")}}
+	p.Implementor = &fakeImplementor{ops: []implementor.Operation{writeOp("a.go", "package a\n")}}
+	p.Verifier = panicVerifier{}
+	newQueuedJob(t, repo, "vpanic")
+
+	err := p.Process(context.Background(), "vpanic")
+	if !errors.Is(err, ErrPanic) {
+		t.Fatalf("got %v, want ErrPanic", err)
+	}
+	got, _ := repo.Get(context.Background(), "vpanic")
+	if got.Status != jobs.StatusFailed {
+		t.Errorf("status = %q, want failed", got.Status)
 	}
 }
 

@@ -503,3 +503,49 @@ func TestVerify_UnimplementedVariantCannotWin(t *testing.T) {
 		t.Errorf("job completed with patch %q; an unimplemented variant won", got)
 	}
 }
+
+// The patch is most worth having when a job did not finish cleanly. A job that
+// runs out of time reaches capture with its context already dead, so reading
+// the diff through that context would lose the artifact in exactly the case
+// where seeing what the job was doing matters most.
+func TestCaptureDiff_SurvivesATimedOutJob(t *testing.T) {
+	repo := jobs.NewInMemoryRepository()
+	arts := newArtifacts()
+
+	p := NewProcessor(repo, NewCanceller(), events.NewInProcessBus())
+	p.Workspaces = &ctxCheckingWorkspaces{
+		inner: &diffingWorkspaces{base: t.TempDir(), diffs: map[int]string{0: sampleDiff("interrupted")}},
+	}
+	p.Implementor = &fakeImplementor{ops: []implementor.Operation{writeOp("a.go", "package a\n")}}
+	// The deadline expires while the checks are running, which is the realistic
+	// shape: the work happened, the clock ran out mid-verification.
+	p.Verifier = &blockingVerifier{}
+	p.JobTimeout = 300 * time.Millisecond
+	p.Artifacts = arts
+	newQueuedJob(t, repo, "timedout")
+
+	if err := p.Process(context.Background(), "timedout"); err == nil {
+		t.Fatal("expected the job to fail on its deadline")
+	}
+	got, ok := arts.get("timedout", ArtifactDiff)
+	if !ok || !strings.Contains(got, "interrupted") {
+		t.Errorf("the patch was lost because the job's context was dead: got %q", got)
+	}
+}
+
+// ctxCheckingWorkspaces refuses to diff on a cancelled context, the way a real
+// command runner does.
+type ctxCheckingWorkspaces struct{ inner workspace.WorkspaceManager }
+
+func (c *ctxCheckingWorkspaces) Create(ctx context.Context, id, repoPath string) (*workspace.Workspace, error) {
+	return c.inner.Create(ctx, id, repoPath)
+}
+func (c *ctxCheckingWorkspaces) Cleanup(ctx context.Context, ws *workspace.Workspace) error {
+	return c.inner.Cleanup(ctx, ws)
+}
+func (c *ctxCheckingWorkspaces) Diff(ctx context.Context, ws *workspace.Workspace) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return c.inner.Diff(ctx, ws)
+}

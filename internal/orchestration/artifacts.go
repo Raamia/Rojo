@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/Raamia/Rojo/internal/events"
 )
@@ -11,6 +12,11 @@ import (
 // ArtifactDiff is the name a job's patch is stored under. It is a plain unified
 // diff, so `curl .../diff | git apply` works without any unwrapping.
 const ArtifactDiff = "patch.diff"
+
+// diffTimeout bounds reading a patch out of a worktree. It runs on a context
+// stripped of cancellation, so it needs a deadline of its own or a wedged git
+// would hold the worker forever.
+const diffTimeout = 30 * time.Second
 
 // ArtifactStore persists a job's outputs. Declared here, near its consumer, so
 // the processor can be tested without a filesystem.
@@ -37,7 +43,15 @@ func (p *Processor) captureDiff(ctx context.Context, log *slog.Logger, jobID str
 		return
 	}
 
-	diff, err := p.Workspaces.Diff(ctx, c.ws)
+	// Stripped of cancellation, and separately bounded. By the time a job that
+	// timed out or was cancelled reaches here its context is already dead, and
+	// reading the diff through it fails — losing the patch in exactly the cases
+	// where seeing what the job was doing matters most. Cleanup solves the same
+	// problem the same way.
+	diffCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), diffTimeout)
+	defer cancel()
+
+	diff, err := p.Workspaces.Diff(diffCtx, c.ws)
 	if err != nil {
 		log.Error("capture diff", "variant", c.index, "err", err)
 		return
