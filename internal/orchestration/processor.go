@@ -224,11 +224,8 @@ func (p *Processor) Process(ctx context.Context, jobID string) (err error) {
 			return p.endInterrupted(job, err)
 		}
 		p.emit(jobCtx, jobID, events.TypeStepStarted, map[string]any{"status": string(next)})
-		if err := job.Transition(next); err != nil {
-			return fmt.Errorf("transition to %s: %w", next, err)
-		}
-		if err := p.Repo.Update(jobCtx, job); err != nil {
-			return fmt.Errorf("persist status %s: %w", next, err)
+		if err := p.advance(jobCtx, job, next); err != nil {
+			return p.markFailed(job, err)
 		}
 
 		// The step's actual work happens between started and completed, so
@@ -356,11 +353,8 @@ func (p *Processor) Process(ctx context.Context, jobID string) (err error) {
 		return p.markFailed(job, gateErr)
 	}
 	p.emit(jobCtx, jobID, events.TypeStepStarted, map[string]any{"status": string(jobs.StatusCompleted)})
-	if err := job.Transition(jobs.StatusCompleted); err != nil {
-		return fmt.Errorf("transition to %s: %w", jobs.StatusCompleted, err)
-	}
-	if err := p.Repo.Update(jobCtx, job); err != nil {
-		return fmt.Errorf("persist status %s: %w", jobs.StatusCompleted, err)
+	if err := p.advance(jobCtx, job, jobs.StatusCompleted); err != nil {
+		return p.markFailed(job, err)
 	}
 	log.Info("step complete", "status", jobs.StatusCompleted)
 	p.emit(jobCtx, jobID, events.TypeStepCompleted, map[string]any{"status": string(jobs.StatusCompleted)})
@@ -517,6 +511,24 @@ func pathsOf(ops []implementor.Operation) []string {
 		out = append(out, op.Path)
 	}
 	return out
+}
+
+// advance moves a job to its next status and persists it.
+//
+// Both halves are failure paths that used to return without ending the job,
+// which left it sitting in a non-terminal status that nothing would ever
+// revisit — a job stuck at "verifying" forever, looking like it was still
+// working. Callers route the error through markFailed instead. If the store is
+// what is broken then markFailed's own write fails too, and it joins that on;
+// the outcome is at least reported rather than silently abandoned.
+func (p *Processor) advance(ctx context.Context, job *jobs.Job, next jobs.JobStatus) error {
+	if err := job.Transition(next); err != nil {
+		return fmt.Errorf("transition to %s: %w", next, err)
+	}
+	if err := p.Repo.Update(ctx, job); err != nil {
+		return fmt.Errorf("persist status %s: %w", next, err)
+	}
+	return nil
 }
 
 // endInterrupted decides how a job that stopped early should end.

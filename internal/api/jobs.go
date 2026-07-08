@@ -5,7 +5,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/Raamia/Rojo/internal/events"
@@ -132,17 +134,76 @@ func (h *JobsHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusAccepted, map[string]string{"job_id": id, "status": "cancel_requested"})
 }
 
+// Pagination bounds for GET /api/v1/jobs. Without a cap the endpoint serialises
+// every job the service has ever run into one response, which grows without
+// limit and is a free way for any client to make the server allocate.
+const (
+	DefaultListLimit = 50
+	MaxListLimit     = 200
+)
+
+// List returns a page of jobs, newest first.
+//
+// The page is a slice of the full ordered list: the store still materialises
+// every record to sort them, so this bounds the response rather than the read.
+// That is the right trade for a single-node service with a filesystem store —
+// the response is what crosses the network and what the client has to hold —
+// and the place to fix it later is the repository, not here.
 func (h *JobsHandler) List(w http.ResponseWriter, r *http.Request) {
+	limit, offset, err := pageParams(r)
+	if err != nil {
+		WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	list, err := h.Repo.List(r.Context())
 	if err != nil {
 		LoggerFrom(r.Context()).Error("list jobs", "err", err)
 		WriteJSONError(w, http.StatusInternalServerError, "failed to list jobs")
 		return
 	}
-	if list == nil {
-		list = []*jobs.Job{}
+
+	// The total goes in a header so the body stays a plain array — clients that
+	// predate paging keep working, and one that wants to page has what it needs.
+	w.Header().Set("X-Total-Count", strconv.Itoa(len(list)))
+
+	if offset > len(list) {
+		offset = len(list)
 	}
-	WriteJSON(w, http.StatusOK, list)
+	end := offset + limit
+	if end > len(list) {
+		end = len(list)
+	}
+	page := list[offset:end]
+	if page == nil {
+		page = []*jobs.Job{}
+	}
+	WriteJSON(w, http.StatusOK, page)
+}
+
+// pageParams reads limit and offset, rejecting nonsense rather than silently
+// substituting a default: a client that asked for limit=-1 has a bug, and
+// quietly returning 50 hides it.
+func pageParams(r *http.Request) (limit, offset int, err error) {
+	limit, offset = DefaultListLimit, 0
+	q := r.URL.Query()
+
+	if raw := q.Get("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 {
+			return 0, 0, fmt.Errorf("limit must be a positive integer, got %q", raw)
+		}
+		if limit > MaxListLimit {
+			limit = MaxListLimit
+		}
+	}
+	if raw := q.Get("offset"); raw != "" {
+		offset, err = strconv.Atoi(raw)
+		if err != nil || offset < 0 {
+			return 0, 0, fmt.Errorf("offset must be a non-negative integer, got %q", raw)
+		}
+	}
+	return limit, offset, nil
 }
 
 func newID() string {

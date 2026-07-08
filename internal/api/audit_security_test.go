@@ -407,9 +407,10 @@ func TestSecurity_CreateJob_OversizedBodyRejectedBeforeBuffering(t *testing.T) {
 	}
 }
 
-// MEDIUM: List has no pagination (jobs.go:108-118, postgres/jobs.go:78-107 has
-// no LIMIT). Every call materialises and serialises the entire jobs table.
-func TestSecurity_ListJobs_UnboundedNoPagination_DocumentsGap(t *testing.T) {
+// FIXED: List used to serialise every job in storage into one response, with
+// ?limit silently ignored — a free way for any client to make the server
+// allocate, growing without bound as the service is used.
+func TestSecurity_ListJobs_IsPaginated(t *testing.T) {
 	c := newSecAuditChain(t, secAuditChainOpts{token: "tok"})
 
 	const n = 2000
@@ -425,17 +426,23 @@ func TestSecurity_ListJobs_UnboundedNoPagination_DocumentsGap(t *testing.T) {
 		}
 	}
 
-	// Pagination parameters are silently ignored.
-	rec := c.do(t, http.MethodGet, "/api/v1/jobs?limit=10&offset=0&page_size=1", "tok", "203.0.113.5:1", nil)
+	rec := c.do(t, http.MethodGet, "/api/v1/jobs?limit=10", "tok", "203.0.113.5:1", nil)
 	var got []jobs.Job
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(got) != n {
-		t.Fatalf("VULNERABILITY FIXED? got %d jobs, expected all %d", len(got), n)
+	if len(got) != 10 {
+		t.Fatalf("got %d jobs for ?limit=10, want 10 of %d", len(got), n)
 	}
-	t.Logf("PROVEN: ?limit=10 ignored; returned all %d jobs in a %d-byte response. "+
-		"Response size grows linearly with table size and there is no cap.", len(got), rec.Body.Len())
+
+	// And a client that asks for nothing in particular is still bounded.
+	rec = c.do(t, http.MethodGet, "/api/v1/jobs", "tok", "203.0.113.5:1", nil)
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got) > MaxListLimit {
+		t.Fatalf("an unparameterised request returned %d of %d jobs", len(got), n)
+	}
 }
 
 // HIGH: cmd/api/main.go:77-81 sets only ReadHeaderTimeout. ReadTimeout,

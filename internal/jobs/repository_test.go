@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestInMemoryRepository_CreateAndGet(t *testing.T) {
@@ -123,5 +125,69 @@ func TestInMemoryRepository_ConcurrentAccess(t *testing.T) {
 	all, _ := repo.List(ctx)
 	if len(all) != writers*perWriter {
 		t.Errorf("got %d jobs, want %d", len(all), writers*perWriter)
+	}
+}
+
+// The order List returns is part of the interface, not an accident of storage.
+// Map iteration in Go is deliberately randomised, so a repository that just
+// ranges over its map answers the same request differently every time — and
+// paging over that makes consecutive pages overlap and skip records.
+func TestInMemoryRepository_ListIsNewestFirstAndStable(t *testing.T) {
+	repo := NewInMemoryRepository()
+	ctx := context.Background()
+	base := time.Now().UTC()
+
+	for i, id := range []string{"oldest", "middle", "newest"} {
+		j := &Job{
+			ID: id, Task: "t", RepoPath: "/tmp/repo", Status: StatusQueued,
+			CreatedAt: base.Add(time.Duration(i) * time.Minute),
+			UpdatedAt: base,
+		}
+		if err := repo.Create(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	want := "newest,middle,oldest"
+	// Several times over: one lucky ordering from a map range would otherwise
+	// pass by chance.
+	for i := 0; i < 20; i++ {
+		list, err := repo.List(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, j := range list {
+			ids = append(ids, j.ID)
+		}
+		if got := strings.Join(ids, ","); got != want {
+			t.Fatalf("run %d: order = %s, want %s", i, got, want)
+		}
+	}
+}
+
+// Jobs created in the same instant still need one definitive order.
+func TestInMemoryRepository_ListTieBreaksOnID(t *testing.T) {
+	repo := NewInMemoryRepository()
+	ctx := context.Background()
+	at := time.Now().UTC()
+
+	for _, id := range []string{"c", "a", "b"} {
+		if err := repo.Create(ctx, &Job{
+			ID: id, Task: "t", RepoPath: "/tmp/repo", Status: StatusQueued,
+			CreatedAt: at, UpdatedAt: at,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 20; i++ {
+		list, _ := repo.List(ctx)
+		var ids []string
+		for _, j := range list {
+			ids = append(ids, j.ID)
+		}
+		if got := strings.Join(ids, ","); got != "a,b,c" {
+			t.Fatalf("run %d: order = %s, want a,b,c", i, got)
+		}
 	}
 }

@@ -202,11 +202,11 @@ func TestResilience_ShutdownWithCancelledCtxLeavesJobStuckInQueued(t *testing.T)
 	}
 }
 
-// Narrower window, same class of bug: shutdown lands between job.Transition and
-// Repo.Update (processor.go:66-71). The persisted status stays at the PREVIOUS
-// step and Process returns "persist status ...". markCancelled is never reached,
-// so the job never becomes terminal.
-func TestResilience_CancelDuringPersistLeavesJobInNonTerminalStatus(t *testing.T) {
+// Shutdown lands between job.Transition and Repo.Update, so the status write
+// fails. This used to return without ending the job, leaving it parked at the
+// previous step with nothing left to pick it up; the transition and the persist
+// now both route through markFailed, so the job ends terminal either way.
+func TestResilience_CancelDuringPersistStillEndsTheJob(t *testing.T) {
 	inner := jobs.NewInMemoryRepository()
 	resNewJob(t, inner, "job-persist-cancel")
 
@@ -235,12 +235,9 @@ func TestResilience_CancelDuringPersistLeavesJobInNonTerminalStatus(t *testing.T
 	}
 
 	got := resStatus(t, inner, "job-persist-cancel")
-	if got != jobs.StatusPreparingWorkspace {
-		t.Fatalf("status = %q, want %q (the last successfully persisted step)",
-			got, jobs.StatusPreparingWorkspace)
-	}
-	if got == jobs.StatusCancelled || got == jobs.StatusFailed {
-		t.Fatalf("unexpected terminal status %q — behavior changed, re-baseline this test", got)
+	if got != jobs.StatusFailed {
+		t.Fatalf("status = %q, want failed — a job whose status write fails must "+
+			"not be abandoned mid-ladder", got)
 	}
 }
 
@@ -378,12 +375,11 @@ func TestResilience_HungStepBlocksWorkerForeverInNonTerminalStatus(t *testing.T)
 // FAILURE MODE 6 — repository failure mid-pipeline
 // ---------------------------------------------------------------------------
 
-// The Processor NEVER assigns jobs.StatusFailed and never emits
-// events.TypeJobFailed (grep confirms neither symbol appears outside
-// status.go / transitions.go / events.go). Any repository error therefore
-// leaves the job wedged in whatever non-terminal status it last persisted;
-// the worker merely logs the error and moves on (pool.go:49-51).
-func TestResilience_RepoFailureMidPipelineLeavesJobStuckAndNeverMarksFailed(t *testing.T) {
+// A repository error mid-pipeline used to leave the job wedged in whatever
+// non-terminal status it last persisted, with the worker logging the error and
+// moving on. The job now ends failed and says so on the event stream, which is
+// what an operator watching a job needs to see.
+func TestResilience_RepoFailureMidPipelineMarksTheJobFailed(t *testing.T) {
 	inner := jobs.NewInMemoryRepository()
 	resNewJob(t, inner, "job-db-down")
 
@@ -412,23 +408,20 @@ func TestResilience_RepoFailureMidPipelineLeavesJobStuckAndNeverMarksFailed(t *t
 	}
 
 	got := resStatus(t, inner, "job-db-down")
-	if got != jobs.StatusImplementing {
-		t.Fatalf("status = %q, want %q (stuck at the last good step)", got, jobs.StatusImplementing)
-	}
-	if got == jobs.StatusFailed {
-		t.Fatal("job is now marked failed — behavior changed, re-baseline this test")
+	if got != jobs.StatusFailed {
+		t.Fatalf("status = %q, want failed", got)
 	}
 
-	// No job.failed event is ever published either: an operator watching the
-	// stream sees the job simply stop mid-ladder.
+	// A job that stops mid-ladder with no event looks identical to a job that
+	// is still working.
 	var sawFailed bool
 	for _, e := range resDrain(sub) {
 		if e.Type == events.TypeJobFailed {
 			sawFailed = true
 		}
 	}
-	if sawFailed {
-		t.Fatal("job.failed was emitted — behavior changed, re-baseline this test")
+	if !sawFailed {
+		t.Error("no job.failed event: a watching operator sees the job simply stop")
 	}
 }
 

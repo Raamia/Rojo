@@ -450,6 +450,7 @@ func TestStore_ConcurrentAccess(t *testing.T) {
 		t.Errorf("got %d jobs, want 20", len(list))
 	}
 }
+
 // Two processes on one data directory would rebuild independent in-memory
 // indexes and overwrite job.json behind each other's backs — silent corruption
 // where every individual write succeeds. The classic cause is a second
@@ -477,4 +478,39 @@ func TestStore_SecondOpenOfTheSameDataDirIsRefused(t *testing.T) {
 		t.Fatalf("reopen after Close: %v", err)
 	}
 	second.Close()
+}
+
+// A store that answers reads perfectly while every write fails is exactly the
+// outage a health check exists to catch: the process looks fine and every job
+// fails to persist.
+func TestStore_HealthDetectsAnUnwritableDataDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permissions do not restrict writes")
+	}
+	s, dir := newStore(t)
+	if err := s.Health(); err != nil {
+		t.Fatalf("a fresh store should be healthy: %v", err)
+	}
+
+	if err := os.Chmod(dir, 0o500); err != nil { // read+execute, no write
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+
+	err := s.Health()
+	if err == nil {
+		t.Fatal("a read-only data dir reported healthy")
+	}
+	// /healthz is unauthenticated, so the message must not hand out the
+	// deployment's filesystem layout. The detail belongs in the log.
+	if strings.Contains(err.Error(), dir) {
+		t.Errorf("health error leaks the data dir path: %v", err)
+	}
+
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Health(); err != nil {
+		t.Errorf("should recover once writable again: %v", err)
+	}
 }

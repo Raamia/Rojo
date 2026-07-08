@@ -342,8 +342,8 @@ func TestRobustness_BodyOnGETAndQueryParamsAreIgnored(t *testing.T) {
 		"pagination, so GET /api/v1/jobs always serializes every job in storage")
 }
 
-// List has no limit: the response grows without bound with the number of jobs.
-func TestRobustness_BUG_ListHasNoPaginationOrLimit(t *testing.T) {
+// List is bounded: the response no longer grows with the number of jobs.
+func TestRobustness_ListIsBounded(t *testing.T) {
 	repo := jobs.NewInMemoryRepository()
 	h := NewJobsHandler(repo, &rbStubQueue{}, &rbStubCanceller{}, nil)
 	for i := 0; i < 5000; i++ {
@@ -366,17 +366,21 @@ func TestRobustness_BUG_ListHasNoPaginationOrLimit(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 5000 {
-		t.Fatalf("got %d jobs, want 5000", len(got))
+	if len(got) != DefaultListLimit {
+		t.Fatalf("got %d jobs of 5000, want the %d default page", len(got), DefaultListLimit)
 	}
-	t.Logf("CONFIRMED BUG: GET /api/v1/jobs returned all 5000 jobs (%d bytes) in %s "+
-		"with no limit, offset, or cursor. InMemoryRepository.List also clones every "+
-		"job under a read lock, so cost is O(total jobs) per request",
-		rec.Body.Len(), elapsed)
+	if total := rec.Header().Get("X-Total-Count"); total != "5000" {
+		t.Errorf("X-Total-Count = %q, want 5000 so a client can page", total)
+	}
+	// The read is still O(total jobs) — the store materialises and sorts
+	// everything to page it. What is bounded is the response.
+	t.Logf("bounded: %d of 5000 jobs, %d bytes, %s", len(got), rec.Body.Len(), elapsed)
 }
 
-// List order is map-iteration order: unstable between identical requests.
-func TestRobustness_BUG_ListOrderIsNonDeterministic(t *testing.T) {
+// List order used to be Go map-iteration order, which changes between identical
+// requests — and any paging built on that is unsound, because consecutive pages
+// overlap and skip. It is now newest-first, and that is part of the interface.
+func TestRobustness_ListOrderIsDeterministic(t *testing.T) {
 	repo := jobs.NewInMemoryRepository()
 	h := NewJobsHandler(repo, &rbStubQueue{}, &rbStubCanceller{}, nil)
 	for i := 0; i < 50; i++ {
@@ -399,18 +403,9 @@ func TestRobustness_BUG_ListOrderIsNonDeterministic(t *testing.T) {
 	}
 
 	first := order()
-	differed := false
 	for i := 0; i < 20; i++ {
-		if order() != first {
-			differed = true
-			break
+		if got := order(); got != first {
+			t.Fatalf("run %d returned a different order:\n %s\n %s", i, first, got)
 		}
 	}
-	if !differed {
-		t.Skip("map iteration happened to be stable across 20 calls; ordering is " +
-			"still unspecified by construction")
-	}
-	t.Log("CONFIRMED BUG: GET /api/v1/jobs returns jobs in Go map iteration order, " +
-		"which changes between identical requests. No ORDER BY / sort is applied " +
-		"(internal/jobs/repository.go:60-68), so any paging built on this is unsound")
 }

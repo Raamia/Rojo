@@ -135,9 +135,14 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		api.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
+	health := api.NewHealthHandler()
+	// Writability, not reachability: a read-only or full data directory is the
+	// failure that makes this instance useless while it still answers HTTP.
+	health.Register("store", func(context.Context) error { return store.Health() })
+	health.Info = func() map[string]any {
+		return map[string]any{"queue_depth": q.Len(), "workers": cfg.WorkerCount}
+	}
+	mux.HandleFunc("GET /healthz", health.Health)
 	mux.HandleFunc("POST /api/v1/jobs", handler.Create)
 	mux.HandleFunc("GET /api/v1/jobs", handler.List)
 	mux.HandleFunc("GET /api/v1/jobs/{jobID}", handler.Get)

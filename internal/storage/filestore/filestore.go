@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -341,4 +342,36 @@ func (s *Store) ReadArtifact(jobID, name string) ([]byte, error) {
 		return nil, err
 	}
 	return b, nil
+}
+
+// Health reports whether the store can still do the one thing a job needs from
+// it: write. A data directory that has gone read-only or run out of space stays
+// perfectly readable, so a check that only stats the directory would report
+// healthy while every job fails to persist.
+//
+// The probe writes and removes a small file rather than reusing WriteArtifact,
+// so it cannot collide with a real job's artifacts.
+//
+// The returned errors deliberately name the condition and not the path. This
+// reaches an unauthenticated /healthz, and the data directory layout is not
+// something to hand to anyone who can reach the port; the full error, path
+// included, goes to the log where an operator will look for it.
+func (s *Store) Health() error {
+	f, err := os.CreateTemp(s.dir, ".health*")
+	if err != nil {
+		slog.Error("health probe: create file in data dir", "dir", s.dir, "err", err)
+		return errors.New("data dir is not writable")
+	}
+	name := f.Name()
+	defer os.Remove(name)
+	if _, err := f.WriteString("ok"); err != nil {
+		f.Close()
+		slog.Error("health probe: write to data dir", "dir", s.dir, "err", err)
+		return errors.New("data dir is not writable")
+	}
+	if err := f.Close(); err != nil {
+		slog.Error("health probe: close", "dir", s.dir, "err", err)
+		return errors.New("data dir write could not be completed")
+	}
+	return nil
 }
