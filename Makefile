@@ -1,4 +1,9 @@
-.PHONY: test race run lint fmt check docker docker-run
+.PHONY: build test race run lint fmt check docker docker-run
+
+# Both binaries: the server and the CLI that talks to it.
+build:
+	go build -o bin/rojo-api ./cmd/api
+	go build -o bin/rojo ./cmd/rojo
 
 test:
 	go test ./...
