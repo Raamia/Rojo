@@ -53,6 +53,11 @@ type AnthropicOptions struct {
 	// MaxRetries bounds the SDK's automatic retry of 408/409/429/5xx and
 	// connection errors. Zero uses the SDK default (2).
 	MaxRetries int
+	// BaseURL overrides the API endpoint. Empty means the real API. It exists
+	// for pointing the client at a proxy or gateway, and it is what lets the
+	// end-to-end tests drive the whole pipeline through the real SDK against a
+	// stub — the alternative being to never exercise this code path at all.
+	BaseURL string
 }
 
 func NewAnthropicClient(opts AnthropicOptions) *AnthropicClient {
@@ -65,6 +70,9 @@ func NewAnthropicClient(opts AnthropicOptions) *AnthropicClient {
 	}
 	if opts.MaxRetries > 0 {
 		clientOpts = append(clientOpts, option.WithMaxRetries(opts.MaxRetries))
+	}
+	if opts.BaseURL != "" {
+		clientOpts = append(clientOpts, option.WithBaseURL(opts.BaseURL))
 	}
 
 	m := DefaultModel
