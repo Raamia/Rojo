@@ -137,8 +137,8 @@ func pipelineRepo(t *testing.T) string {
 }
 
 // buildPipeline wires the processor exactly as cmd/api/main.go does, but with
-// the model client pointed at a local server.
-func buildPipeline(t *testing.T, fake *fakeAnthropic) (*orchestration.Processor, *filestore.Store, *events.PersistingBus) {
+// the model client pointed at the given local server.
+func buildPipeline(t *testing.T, modelURL string) (*orchestration.Processor, *filestore.Store, *events.PersistingBus) {
 	t.Helper()
 
 	store, err := filestore.New(t.TempDir())
@@ -153,7 +153,7 @@ func buildPipeline(t *testing.T, fake *fakeAnthropic) (*orchestration.Processor,
 		execution.NewExecRunner(), execution.NewAllowlist("go", "gofmt"), 3*time.Minute)
 
 	mc := model.NewAnthropicClient(model.AnthropicOptions{
-		APIKey: "test-key", BaseURL: fake.URL, Timeout: time.Minute,
+		APIKey: "test-key", BaseURL: modelURL, Timeout: time.Minute,
 	})
 
 	p := orchestration.NewProcessor(store, orchestration.NewCanceller(), bus)
@@ -185,7 +185,7 @@ func submit(t *testing.T, store *filestore.Store, id, task, repoPath string) {
 func TestPipeline_PlanImplementVerifyReviewProducesAPatch(t *testing.T) {
 	repo := pipelineRepo(t)
 	fake := newFakeAnthropic(t, planReply, implReply, approveReply)
-	p, store, _ := buildPipeline(t, fake)
+	p, store, _ := buildPipeline(t, fake.URL)
 	submit(t, store, "full", "add a Greet function returning hi", repo)
 
 	if err := p.Process(context.Background(), "full"); err != nil {
@@ -255,7 +255,7 @@ func TestPipeline_FailingBuildTriggersARealRevision(t *testing.T) {
 		`"content":"package main\n\nfunc Greet() string { return 42 }\n"}]}`
 
 	fake := newFakeAnthropic(t, planReply, broken, implReply, approveReply)
-	p, store, _ := buildPipeline(t, fake)
+	p, store, _ := buildPipeline(t, fake.URL)
 	submit(t, store, "revise", "add a Greet function returning hi", repo)
 
 	if err := p.Process(context.Background(), "revise"); err != nil {
@@ -296,7 +296,7 @@ func TestPipeline_ReviewerCannotApproveABrokenBuild(t *testing.T) {
 	// Every reply after the plan is "broken", so both passes fail the gate, and
 	// the reviewer would approve if it were ever asked.
 	fake := newFakeAnthropic(t, planReply, broken, broken, approveReply)
-	p, store, _ := buildPipeline(t, fake)
+	p, store, _ := buildPipeline(t, fake.URL)
 	submit(t, store, "nope", "add a Greet function", repo)
 
 	if err := p.Process(context.Background(), "nope"); err == nil {
@@ -318,7 +318,7 @@ func TestPipeline_ReviewerCannotApproveABrokenBuild(t *testing.T) {
 func TestPipeline_MalformedModelOutputFailsSafely(t *testing.T) {
 	repo := pipelineRepo(t)
 	fake := newFakeAnthropic(t, "I have decided to write greet.go for you. Here is why...")
-	p, store, _ := buildPipeline(t, fake)
+	p, store, _ := buildPipeline(t, fake.URL)
 	submit(t, store, "garbage", "add a Greet function", repo)
 
 	if err := p.Process(context.Background(), "garbage"); err == nil {
@@ -338,7 +338,7 @@ func TestPipeline_MalformedModelOutputFailsSafely(t *testing.T) {
 func TestPipeline_EventLogTellsTheStory(t *testing.T) {
 	repo := pipelineRepo(t)
 	fake := newFakeAnthropic(t, planReply, implReply, approveReply)
-	p, store, _ := buildPipeline(t, fake)
+	p, store, _ := buildPipeline(t, fake.URL)
 	submit(t, store, "events", "add a Greet function", repo)
 
 	if err := p.Process(context.Background(), "events"); err != nil {
@@ -377,4 +377,39 @@ func truncateForLog(s string) string {
 		return s[:1200] + "..."
 	}
 	return s
+}
+
+// pipelineRepoNoTest is a repository that already compiles and passes, so the
+// gate is green regardless of what the implementor writes. Used where the point
+// is concurrency rather than the gate.
+func pipelineRepoNoTest(t *testing.T) string {
+	t.Helper()
+	hasGit(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not available")
+	}
+
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod":  "module concurrentprobe\n\ngo 1.25\n",
+		"main.go": "package main\n\nfunc main() {}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{
+		{"init", "-b", "main", "."},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "test"},
+		{"add", "."},
+		{"commit", "-m", "initial"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	return dir
 }
