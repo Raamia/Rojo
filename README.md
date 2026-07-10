@@ -6,21 +6,33 @@ Rojo accepts a software task, creates an isolated Git worktree, plans the work, 
 
 ## Requirements
 
-- Go 1.25+
+- Go 1.25+ (to build, and for verifying Go repositories)
 - Git
+- Whatever toolchain the repositories you point it at are verified with — `npm`
+  for Node, `pytest` for Python, `cargo` for Rust. A missing toolchain does not
+  fail a job; it is recorded as a skipped check.
 
-That's it — no database, no Docker, no services. Rojo stores everything in a
-directory you point it at.
+No database, no services. Rojo stores everything in a directory you point it at.
 
 ## Getting started
 
 ```bash
-make run
+make build          # builds bin/rojo-api (server) and bin/rojo (CLI)
+bin/rojo-api        # or: make run
+
+# in another terminal, from any git repository:
+bin/rojo run "add a retry with backoff to the HTTP client"
 ```
 
-The server listens on `:8080` by default and writes to `./rojo-data`. Jobs,
-their event history, and their artifacts persist there, so everything survives a
-restart out of the box.
+The server listens on `127.0.0.1:8080` by default — loopback, so only this
+machine can reach it — and writes to `./rojo-data`. Jobs, their event history,
+and their artifacts persist there, so everything survives a restart out of the
+box. Set `ANTHROPIC_API_KEY` before starting the server to enable the planner,
+implementor and reviewer; without it a job still isolates, verifies and reports.
+
+`rojo run` streams progress to stderr and writes the finished patch to stdout,
+so `rojo run "fix X" > fix.patch` captures the change while you watch it happen;
+`-apply` applies it to the repository instead. See [The CLI](#the-cli) below.
 
 ## What a job does today
 
@@ -32,8 +44,13 @@ restart out of the box.
 4. If a key is set, the implementor proposes structured file operations and the
    backend applies them inside the worktree — path-validated and sandboxed, so
    a proposal cannot write outside it however convincing the model was.
-5. Deterministic verification runs **inside that worktree**: `gofmt -l .`,
-   `go vet ./...`, `go test ./...`.
+5. Deterministic verification runs **inside that worktree**, with the checks
+   chosen by what the repository is: `go.mod` runs `gofmt`/`go vet`/`go test`,
+   `package.json` with a real test script runs `npm test`, a Python manifest
+   runs `pytest`, `Cargo.toml` runs `cargo test`. The repository selects a
+   preset by what it contains; it can never name the command that runs. A
+   toolchain that is not installed, or a repo with no tests, is recorded as a
+   note rather than a false pass — "verified" and "compiled" stay distinct.
 6. The reviewer judges whether the change did what was asked. It only ever sees
    a change that already passed the checks — deterministic results outrank model
    judgement, so a change that does not build is not something it gets an
@@ -114,22 +131,53 @@ rojo-data/jobs/<job-id>/
 Plain files on purpose — a patch you can `git apply`, a log you can `cat`, and
 no schema to migrate.
 
+One process owns the directory at a time. The server takes an exclusive lock on
+`ROJO_DATA_DIR/.lock` at startup, so a second server pointed at the same
+directory refuses to start rather than corrupting shared state — a second
+`make run` fails with a clear message instead of quietly clobbering the first.
+
+## The CLI
+
+`rojo` talks to a running server over the same HTTP API as any other client —
+it has no privileged path.
+
+```
+rojo run [-repo DIR] [-apply] "task"   submit, stream progress, deliver the patch
+rojo list [-limit N]                   recent jobs, newest first
+rojo get JOB_ID                        one job's status and task
+rojo events JOB_ID                     a job's event history
+rojo diff JOB_ID                       print a job's patch
+rojo cancel JOB_ID                     ask the server to stop a job
+
+  -server URL    default $ROJO_SERVER or http://127.0.0.1:8080
+  -token TOKEN   default $ROJO_AUTH_TOKEN
+```
+
+`run` uses the current directory unless `-repo` is given. Progress goes to
+stderr and the patch to stdout, so redirection captures the patch cleanly.
+`-apply` writes the change into the repository — but never for a failed job,
+whose patch is printed for inspection instead of silently applied. First Ctrl-C
+asks the server to cancel; a second stops watching while the server finishes.
+Exit codes: `0` completed, `1` failed, `2` cancelled.
+
 ## Architecture
 
 ```
-cmd/api        HTTP server entrypoint
-internal/api            HTTP handlers, middleware
+cmd/api                 HTTP server entrypoint
+cmd/rojo                Command-line client
+internal/api            HTTP handlers, middleware, rate limiting, metrics endpoint
 internal/jobs           Job domain: struct, status, transitions, validation
 internal/queue          Buffered in-process job queue
 internal/worker         Worker pool
-internal/orchestration  Processor + cancellation tracker
+internal/orchestration  Processor: the plan→implement→verify→review pipeline
 internal/execution      CommandRunner with allowlist and timeouts
 internal/workspace      Git worktree manager
-internal/verification   Deterministic check runner (gofmt, go vet, go test)
+internal/verification   Stack detection + deterministic check runner
 internal/agents         Model client, planner, implementor, reviewer
 internal/repocontext    Picks the files worth showing a model (git ls-files / git grep)
+internal/metrics        Counters: job outcomes, durations, queue wait, model calls
 internal/events         Event bus + persistence
-internal/storage/filestore  Durable job, event and artifact storage on disk
+internal/storage/filestore  Durable job/event/artifact storage, single-writer locked
 tests                   End-to-end tests
 ```
 
