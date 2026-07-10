@@ -12,6 +12,7 @@ import (
 	"github.com/Raamia/Rojo/internal/agents/planner"
 	"github.com/Raamia/Rojo/internal/events"
 	"github.com/Raamia/Rojo/internal/jobs"
+	"github.com/Raamia/Rojo/internal/metrics"
 	"github.com/Raamia/Rojo/internal/repocontext"
 	"github.com/Raamia/Rojo/internal/verification"
 	"github.com/Raamia/Rojo/internal/workspace"
@@ -70,6 +71,9 @@ type Processor struct {
 	// runs a job once. Higher values fan the job out across that many isolated
 	// checkouts, verify them all, and keep the first that passes.
 	Variants int
+	// Metrics is optional. Nil means nothing is counted, which is what every
+	// test that is not about counting wants.
+	Metrics *metrics.Registry
 	// JobTimeout bounds one job's total execution. A zero value falls back to
 	// DefaultJobTimeout rather than meaning "unlimited": a job that can run
 	// forever holds its worker slot forever, and with the default four workers
@@ -125,7 +129,20 @@ func (p *Processor) Process(ctx context.Context, jobID string) (err error) {
 	// ends terminal, its worktree is removed by the cleanup deferred below
 	// (defers run last-in-first-out, so cleanup happens before this), and the
 	// rest of the service carries on.
+	// Metrics bracket the whole run. Deferred first so it observes the final
+	// status, whatever path set it — success, failure, cancellation, panic.
+	started := time.Now()
+	endMetrics := p.Metrics.JobStarted()
+
 	var job *jobs.Job
+	defer func() {
+		status := "failed" // a job that never loaded ends as a failure
+		if job != nil {
+			status = string(job.Status)
+		}
+		endMetrics(status, time.Since(started))
+	}()
+
 	defer func() {
 		r := recover()
 		if r == nil {
@@ -191,6 +208,10 @@ func (p *Processor) Process(ctx context.Context, jobID string) (err error) {
 	if err != nil {
 		return fmt.Errorf("load job %s: %w", jobID, err)
 	}
+
+	// How long the job waited for a worker: creation to pickup. A job requeued
+	// by startup recovery reports its whole wait, which is the honest number.
+	p.Metrics.QueueWait(started.Sub(job.CreatedAt))
 
 	p.emit(jobCtx, jobID, events.TypeJobStarted, nil)
 
@@ -316,6 +337,7 @@ func (p *Processor) Process(ctx context.Context, jobID string) (err error) {
 			case err != nil:
 				return p.markFailed(job, err)
 			case decision == outcomeRevise:
+				p.Metrics.RevisionRequested()
 				revisions++
 				feedback = notes
 				gateErr = nil

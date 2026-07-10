@@ -19,6 +19,7 @@ import (
 	"github.com/Raamia/Rojo/internal/events"
 	"github.com/Raamia/Rojo/internal/execution"
 	"github.com/Raamia/Rojo/internal/jobs"
+	"github.com/Raamia/Rojo/internal/metrics"
 	"github.com/Raamia/Rojo/internal/orchestration"
 	"github.com/Raamia/Rojo/internal/queue"
 	"github.com/Raamia/Rojo/internal/repocontext"
@@ -79,7 +80,10 @@ func main() {
 	)
 	verifier := verification.NewAutoRunner(verifyRunner)
 
+	reg := metrics.New()
+
 	processor := orchestration.NewProcessor(repo, canceller, bus)
+	processor.Metrics = reg
 	processor.Workspaces = workspaces
 	processor.Verifier = verifier
 	processor.Artifacts = store
@@ -88,11 +92,11 @@ func main() {
 	// pipeline still does useful work — isolate, verify, report — it just does
 	// not plan, so an unset key degrades the service rather than breaking it.
 	if cfg.AnthropicAPIKey != "" {
-		modelClient := model.NewAnthropicClient(model.AnthropicOptions{
+		modelClient := metrics.InstrumentModel(model.NewAnthropicClient(model.AnthropicOptions{
 			APIKey:  cfg.AnthropicAPIKey,
 			Model:   cfg.ModelID,
 			Timeout: cfg.JobTimeout,
-		})
+		}), reg)
 		processor.Planner = planner.NewPlanner(modelClient)
 		processor.Context = repocontext.NewSelector(gitRunner)
 		processor.Implementor = implementor.NewAgent(modelClient)
@@ -156,6 +160,11 @@ func main() {
 
 	diffs := api.NewDiffHandler(repo, store)
 	mux.HandleFunc("GET /api/v1/jobs/{jobID}/diff", diffs.Diff)
+
+	metricsHandler := api.NewMetricsHandler(reg, func() map[string]any {
+		return map[string]any{"queue_depth": q.Len(), "workers": cfg.WorkerCount}
+	})
+	mux.HandleFunc("GET /api/v1/metrics", metricsHandler.Metrics)
 
 	var handlerChain http.Handler = mux
 	handlerChain = api.RecoverMiddleware()(handlerChain)

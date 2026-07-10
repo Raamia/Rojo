@@ -97,6 +97,7 @@ log if a setting does not appear to take effect.
 | GET    | `/api/v1/jobs/{jobID}/events`       | Job event history |
 | GET    | `/api/v1/jobs/{jobID}/diff`         | The job's patch, as `text/x-diff` — pipe it into `git apply` |
 | GET    | `/api/v1/jobs/{jobID}/stream`       | Live event WebSocket    |
+| GET    | `/api/v1/metrics`                   | Counters: job outcomes and durations, queue wait, model calls/latency, active jobs |
 | GET    | `/healthz`                          | Liveness. Probes that the data directory is actually writable; `503` when it is not |
 
 ## Storage
