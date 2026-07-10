@@ -66,22 +66,29 @@ func TestClientKey(t *testing.T) {
 		name       string
 		remoteAddr string
 		xff        string
+		trustProxy bool
 		want       string
 	}{
-		{"strips port from remote addr", "192.0.2.5:54321", "", "192.0.2.5"},
-		{"ipv6 remote addr", "[2001:db8::1]:443", "", "2001:db8::1"},
-		{"xff single", "10.0.0.9:80", "198.51.100.2", "198.51.100.2"},
-		{"xff list takes first, trimmed", "10.0.0.9:80", "198.51.100.2, 70.1.2.3, 70.1.2.4", "198.51.100.2"},
-		{"malformed remote addr falls back whole", "not-an-addr", "", "not-an-addr"},
+		{"strips port from remote addr", "192.0.2.5:54321", "", false, "192.0.2.5"},
+		{"ipv6 remote addr", "[2001:db8::1]:443", "", false, "2001:db8::1"},
+		// XFF is attacker-writable, so by default it is ignored entirely.
+		{"xff ignored by default", "10.0.0.9:80", "198.51.100.2", false, "10.0.0.9"},
+		{"xff honoured when trusted", "10.0.0.9:80", "198.51.100.2", true, "198.51.100.2"},
+		{"trusted xff list takes first, trimmed", "10.0.0.9:80", "198.51.100.2, 70.1.2.3", true, "198.51.100.2"},
+		{"malformed remote addr falls back whole", "not-an-addr", "", false, "not-an-addr"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			rl := NewRateLimiter(1, 1)
+			if tt.trustProxy {
+				rl.TrustProxyHeader()
+			}
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req.RemoteAddr = tt.remoteAddr
 			if tt.xff != "" {
 				req.Header.Set("X-Forwarded-For", tt.xff)
 			}
-			if got := clientKey(req); got != tt.want {
+			if got := rl.clientKey(req); got != tt.want {
 				t.Errorf("clientKey = %q, want %q", got, tt.want)
 			}
 		})

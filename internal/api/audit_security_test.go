@@ -507,71 +507,76 @@ func TestSecurity_HTTPServer_NoReadTimeout_SlowBodyHoldsConnection_DocumentsGap(
 // 3. Rate limiter
 // ===========================================================================
 
-// HIGH: clientKey (ratelimit.go:78-94) trusts X-Forwarded-For unconditionally.
-// There is no trusted-proxy list, and main.go binds the server directly (no
-// reverse proxy is assumed), so any client can mint a fresh bucket per request.
-func TestSecurity_RateLimiter_XForwardedForSpoofBypassesLimit_DocumentsGap(t *testing.T) {
+// X-Forwarded-For is written by whoever connects. Honouring it by default let
+// any client mint a fresh identity — and a fresh, full bucket — per request:
+// 500 spoofed requests from one IP all sailed past a burst of 3, and left 500
+// attacker-named entries resident in the bucket map. The header is now ignored
+// unless the operator opts in for a deployment that really sits behind a
+// trusted proxy.
+func TestSecurity_RateLimiter_XForwardedForSpoofIsIgnoredByDefault(t *testing.T) {
 	const burst = 3
 	rl := NewRateLimiter(burst, 0) // no refill: burst is the hard cap per key
 	h := rl.Middleware()(okHandler())
 
 	const attempts = 500
-	allowed, limited := 0, 0
+	allowed := 0
 	for i := 0; i < attempts; i++ {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs", nil)
 		req.RemoteAddr = "203.0.113.66:5555" // ONE real attacker IP for all of them
 		req.Header.Set("X-Forwarded-For", fmt.Sprintf("10.%d.%d.%d", i/65536%256, i/256%256, i%256))
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
-		switch rec.Code {
-		case http.StatusOK:
+		if rec.Code == http.StatusOK {
 			allowed++
-		case http.StatusTooManyRequests:
-			limited++
 		}
 	}
 
-	if allowed != attempts {
-		t.Fatalf("VULNERABILITY FIXED? only %d/%d spoofed requests allowed (%d limited)", allowed, attempts, limited)
+	if allowed != burst {
+		t.Fatalf("%d of %d spoofed requests allowed, want exactly the burst of %d", allowed, attempts, burst)
 	}
-
 	rl.mu.Lock()
 	buckets := len(rl.buckets)
 	rl.mu.Unlock()
-
-	t.Logf("PROVEN: one source IP sent %d requests with spoofed X-Forwarded-For; ALL %d were allowed "+
-		"against a burst of %d (%.0fx the limit). The limiter is fully bypassable by any client.",
-		attempts, allowed, burst, float64(allowed)/float64(burst))
-	t.Logf("PROVEN MEMORY GROWTH: rl.buckets now holds %d entries — one per forged IP. "+
-		"There is no TTL, no eviction and no cap, so buckets grows unbounded for the process lifetime.", buckets)
-	if buckets != attempts {
-		t.Fatalf("expected %d buckets, got %d", attempts, buckets)
+	if buckets != 1 {
+		t.Fatalf("%d buckets for one real client, want 1 — spoofed headers must not mint entries", buckets)
 	}
 }
 
-// MEDIUM: even without spoofing, buckets are never reclaimed. One entry per
-// distinct client IP, retained forever.
-func TestSecurity_RateLimiter_BucketsNeverEvicted_DocumentsGap(t *testing.T) {
-	rl := NewRateLimiter(10, 100) // fast refill: buckets go idle immediately
+// Buckets used to be retained forever — one entry per distinct client IP for
+// the life of the process, a monotonic leak fed by whoever connects. Idle
+// buckets hold a full allowance anyway, so forgetting them changes nothing
+// about what their owners may do next.
+func TestSecurity_RateLimiter_IdleBucketsAreEvicted(t *testing.T) {
+	rl := NewRateLimiter(10, 100)
 	h := rl.Middleware()(okHandler())
 
-	for i := 0; i < 1000; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs", nil)
-		req.RemoteAddr = fmt.Sprintf("192.0.2.%d:%d", i%256, 1000+i)
-		req.Header.Set("X-Forwarded-For", fmt.Sprintf("172.16.%d.%d", i/256, i%256))
-		h.ServeHTTP(httptest.NewRecorder(), req)
+	fill := func(subnet int, n int) {
+		for i := 0; i < n; i++ {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs", nil)
+			req.RemoteAddr = fmt.Sprintf("192.%d.%d.%d:1000", subnet, i/256, i%256)
+			h.ServeHTTP(httptest.NewRecorder(), req)
+		}
 	}
-	time.Sleep(20 * time.Millisecond) // every bucket is now full/idle
 
+	fill(0, 300) // the first wave of clients...
 	rl.mu.Lock()
-	n := len(rl.buckets)
+	for _, b := range rl.buckets {
+		b.lastSeen = time.Now().Add(-2 * bucketIdleTTL) // ...goes idle
+	}
+	before := len(rl.buckets)
 	rl.mu.Unlock()
 
-	if n != 1000 {
-		t.Fatalf("VULNERABILITY FIXED? %d buckets retained, expected 1000", n)
+	fill(1, 300) // a second wave arrives; its inserts trigger the sweep
+
+	rl.mu.Lock()
+	after := len(rl.buckets)
+	rl.mu.Unlock()
+	if after >= before+300 {
+		t.Fatalf("%d buckets resident after the sweep (was %d + 300 new): idle entries were never evicted", after, before)
 	}
-	t.Logf("PROVEN: %d fully-refilled (idle) buckets still resident. RateLimiter has no janitor "+
-		"goroutine and no max size; memory is monotonically increasing.", n)
+	if after > 300+sweepEvery {
+		t.Fatalf("%d buckets resident, want roughly the 300 live ones", after)
+	}
 }
 
 // HIGH: middleware order in main.go:70-75 puts TokenAuth OUTSIDE the rate

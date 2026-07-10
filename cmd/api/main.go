@@ -160,7 +160,12 @@ func main() {
 	var handlerChain http.Handler = mux
 	handlerChain = api.RecoverMiddleware()(handlerChain)
 	handlerChain = api.LoggerMiddleware(logger)(handlerChain)
-	handlerChain = api.NewRateLimiter(cfg.RateLimitBurst, cfg.RateLimitRPS).Middleware()(handlerChain)
+	limiter := api.NewRateLimiter(cfg.RateLimitBurst, cfg.RateLimitRPS)
+	if cfg.TrustProxyHeader {
+		limiter.TrustProxyHeader()
+		logger.Info("rate limiting keys on X-Forwarded-For (ROJO_TRUST_PROXY_HEADER=true)")
+	}
+	handlerChain = limiter.Middleware()(handlerChain)
 	if cfg.AuthToken != "" {
 		handlerChain = api.TokenAuth(cfg.AuthToken)(handlerChain)
 	} else {

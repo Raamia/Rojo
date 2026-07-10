@@ -24,23 +24,28 @@ type Config struct {
 	AuthToken       string
 	RateLimitBurst  int
 	RateLimitRPS    float64
+	// TrustProxyHeader keys rate limiting by X-Forwarded-For. Only enable it
+	// when a trusted reverse proxy is what connects to this server; from an
+	// untrusted peer the header is attacker-chosen and defeats the limiter.
+	TrustProxyHeader bool
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		HTTPAddr:        getEnv("ROJO_HTTP_ADDR", DefaultHTTPAddr),
-		DataDir:         getEnv("ROJO_DATA_DIR", "./rojo-data"),
-		QueueBuffer:     getEnvInt("ROJO_QUEUE_BUFFER", 64),
-		WorkerCount:     getEnvInt("ROJO_WORKER_COUNT", 4),
-		WorktreeBaseDir: getEnv("ROJO_WORKTREE_DIR", "/tmp/rojo-worktrees"),
-		ShutdownTimeout: getEnvDuration("ROJO_SHUTDOWN_TIMEOUT", 15*time.Second),
-		JobTimeout:      getEnvDuration("ROJO_JOB_TIMEOUT", 30*time.Minute),
-		FanoutVariants:  getEnvInt("ROJO_FANOUT_VARIANTS", 1),
-		AnthropicAPIKey: os.Getenv("ANTHROPIC_API_KEY"),
-		ModelID:         getEnv("ROJO_MODEL", ""),
-		AuthToken:       os.Getenv("ROJO_AUTH_TOKEN"),
-		RateLimitBurst:  getEnvInt("ROJO_RATE_LIMIT_BURST", 30),
-		RateLimitRPS:    getEnvFloat("ROJO_RATE_LIMIT_RPS", 5),
+		HTTPAddr:         getEnv("ROJO_HTTP_ADDR", DefaultHTTPAddr),
+		DataDir:          getEnv("ROJO_DATA_DIR", "./rojo-data"),
+		QueueBuffer:      getEnvInt("ROJO_QUEUE_BUFFER", 64),
+		WorkerCount:      getEnvInt("ROJO_WORKER_COUNT", 4),
+		WorktreeBaseDir:  getEnv("ROJO_WORKTREE_DIR", "/tmp/rojo-worktrees"),
+		ShutdownTimeout:  getEnvDuration("ROJO_SHUTDOWN_TIMEOUT", 15*time.Second),
+		JobTimeout:       getEnvDuration("ROJO_JOB_TIMEOUT", 30*time.Minute),
+		FanoutVariants:   getEnvInt("ROJO_FANOUT_VARIANTS", 1),
+		AnthropicAPIKey:  os.Getenv("ANTHROPIC_API_KEY"),
+		ModelID:          getEnv("ROJO_MODEL", ""),
+		AuthToken:        os.Getenv("ROJO_AUTH_TOKEN"),
+		RateLimitBurst:   getEnvInt("ROJO_RATE_LIMIT_BURST", 30),
+		RateLimitRPS:     getEnvFloat("ROJO_RATE_LIMIT_RPS", 5),
+		TrustProxyHeader: getEnvBool("ROJO_TRUST_PROXY_HEADER", false),
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -173,4 +178,16 @@ func getEnvFloat(key string, fallback float64) float64 {
 		}
 	}
 	return fallback
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fallback
+	}
+	return b
 }

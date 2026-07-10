@@ -76,6 +76,7 @@ still has its worktree reclaimed.
 | `ROJO_AUTH_TOKEN`         | *(unset → **auth disabled**)* | Bearer token required on every route except `/healthz` |
 | `ROJO_RATE_LIMIT_BURST`   | `30`                        | Token-bucket capacity per client IP |
 | `ROJO_RATE_LIMIT_RPS`     | `5`                         | Token refill per second           |
+| `ROJO_TRUST_PROXY_HEADER` | `false`                     | Key rate limits on `X-Forwarded-For`. Enable only behind a reverse proxy you control |
 
 > **Rojo binds loopback by default.** Job submission executes code, and
 > authentication is off until `ROJO_AUTH_TOKEN` is set. If you expose the
