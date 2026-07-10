@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -75,6 +76,16 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		f.mu.Lock()
 		evs := append([]events.Event(nil), f.events...)
 		f.mu.Unlock()
+		// Honour the ?since= cursor the way the real server does, so the watch
+		// loop's incremental fetch is actually exercised.
+		if raw := r.URL.Query().Get("since"); raw != "" {
+			if since, err := strconv.Atoi(raw); err == nil {
+				if since > len(evs) {
+					since = len(evs)
+				}
+				evs = evs[since:]
+			}
+		}
 		_ = json.NewEncoder(w).Encode(evs)
 	})
 	mux.HandleFunc("GET /api/v1/jobs/{id}/diff", func(w http.ResponseWriter, r *http.Request) {

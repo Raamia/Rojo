@@ -137,8 +137,11 @@ func (c *client) listJobs(limit int) ([]job, string, error) {
 	return list, total, nil
 }
 
-func (c *client) jobEvents(id string) ([]events.Event, error) {
-	resp, err := c.do(http.MethodGet, "/api/v1/jobs/"+id+"/events", nil)
+// jobEvents returns the job's events from index `since` onward. Passing the
+// count already seen makes polling fetch only what is new, so watching a
+// long-running job stays O(events) instead of O(polls × events).
+func (c *client) jobEvents(id string, since int) ([]events.Event, error) {
+	resp, err := c.do(http.MethodGet, fmt.Sprintf("/api/v1/jobs/%s/events?since=%d", id, since), nil)
 	if err != nil {
 		return nil, err
 	}

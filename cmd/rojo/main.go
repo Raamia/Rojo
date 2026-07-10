@@ -183,17 +183,18 @@ func cmdRun(c *client, args []string, stdout, stderr io.Writer) int {
 // no reconnect state to get wrong. The WebSocket exists for clients that need
 // lower latency than 400ms.
 func watch(c *client, id string, stderr io.Writer) (job, error) {
-	printed := 0
+	seen := 0
 	for {
-		evs, err := c.jobEvents(id)
+		evs, err := c.jobEvents(id, seen)
 		if err != nil {
 			return job{}, err
 		}
-		for ; printed < len(evs); printed++ {
-			if line := renderEvent(evs[printed]); line != "" {
+		for _, e := range evs {
+			if line := renderEvent(e); line != "" {
 				fmt.Fprintln(stderr, line)
 			}
 		}
+		seen += len(evs)
 
 		j, err := c.getJob(id)
 		if err != nil {
@@ -289,7 +290,7 @@ func cmdEvents(c *client, args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 1
 	}
-	evs, err := c.jobEvents(id)
+	evs, err := c.jobEvents(id, 0) // the events subcommand shows the whole history
 	if err != nil {
 		fmt.Fprintln(stderr, "error:", err)
 		return 1

@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/Raamia/Rojo/internal/events"
 )
@@ -28,6 +29,24 @@ func (h *EventsHandler) History(w http.ResponseWriter, r *http.Request) {
 	}
 	if history == nil {
 		history = []events.Event{}
+	}
+
+	// `?since=N` returns only events at index N onward, so a client polling a
+	// running job fetches just what is new instead of the whole log every time.
+	// The event log is append-only, so an index is a stable cursor: event N is
+	// always the same event. An out-of-range or unparseable value yields an
+	// empty slice rather than an error — a poller that has already seen
+	// everything is asking a perfectly reasonable question.
+	if raw := r.URL.Query().Get("since"); raw != "" {
+		since, err := strconv.Atoi(raw)
+		if err != nil || since < 0 {
+			WriteJSONError(w, http.StatusBadRequest, "since must be a non-negative integer")
+			return
+		}
+		if since > len(history) {
+			since = len(history)
+		}
+		history = history[since:]
 	}
 	WriteJSON(w, http.StatusOK, history)
 }
