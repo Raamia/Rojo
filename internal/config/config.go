@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -180,14 +181,26 @@ func getEnvFloat(key string, fallback float64) float64 {
 	return fallback
 }
 
+// getEnvBool parses a boolean env var, accepting more than strconv.ParseBool.
+//
+// ParseBool rejects "on", "yes" and "enabled" — the exact words an operator
+// reaches for to turn a flag on. Silently treating those as the default means
+// someone who sets ROJO_TRUST_PROXY_HEADER=on gets it *off* with no sign, which
+// for a security-relevant flag is the worst kind of quiet. The accepted
+// vocabulary is widened, case-insensitively, so the natural spellings work.
+// A genuinely unrecognised value still falls back, consistent with the other
+// typed vars here.
 func getEnvBool(key string, fallback bool) bool {
 	v, ok := os.LookupEnv(key)
 	if !ok || v == "" {
 		return fallback
 	}
-	b, err := strconv.ParseBool(v)
-	if err != nil {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "t", "true", "on", "yes", "y", "enable", "enabled":
+		return true
+	case "0", "f", "false", "off", "no", "n", "disable", "disabled":
+		return false
+	default:
 		return fallback
 	}
-	return b
 }

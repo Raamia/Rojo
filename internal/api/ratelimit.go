@@ -73,7 +73,8 @@ type RateLimiter struct {
 	// turn this on.
 	trustProxyHeader bool
 
-	inserts int // new buckets since the last sweep
+	inserts   int       // new buckets since the last sweep
+	lastSwept time.Time // when the map was last swept, for the time-based trigger
 }
 
 func NewRateLimiter(capacity int, refillPerSec float64) *RateLimiter {
@@ -111,8 +112,9 @@ func (rl *RateLimiter) Middleware() func(http.Handler) http.Handler {
 			if !ok {
 				b = newBucket(rl.capacity, rl.refill)
 				rl.buckets[key] = b
-				rl.maybeSweepLocked()
+				rl.inserts++
 			}
+			rl.maybeSweepLocked()
 			allowed := b.allow()
 			rl.mu.Unlock()
 			if !allowed {
@@ -124,15 +126,26 @@ func (rl *RateLimiter) Middleware() func(http.Handler) http.Handler {
 	}
 }
 
-// maybeSweepLocked drops idle buckets, amortised across inserts so the cost
-// stays O(1) per request. The caller must hold rl.mu.
+// maybeSweepLocked drops idle buckets. It runs on two triggers, whichever comes
+// first: sweepEvery new buckets (bounds the map under a flood of distinct IPs),
+// or bucketIdleTTL elapsed since the last sweep (reclaims idle buckets even when
+// no new IPs arrive). The second matters because the insert trigger alone never
+// fires once traffic settles to a recurring set of clients, so buckets that had
+// gone idle would sit resident forever. Called on every request; the time check
+// is a comparison, and the map walk happens at most once per TTL. The caller
+// must hold rl.mu.
 func (rl *RateLimiter) maybeSweepLocked() {
-	rl.inserts++
-	if rl.inserts < sweepEvery {
+	now := time.Now()
+	if rl.lastSwept.IsZero() {
+		rl.lastSwept = now // first request: start the clock, do not sweep an empty map
+		return
+	}
+	if rl.inserts < sweepEvery && now.Sub(rl.lastSwept) < bucketIdleTTL {
 		return
 	}
 	rl.inserts = 0
-	cutoff := time.Now().Add(-bucketIdleTTL)
+	rl.lastSwept = now
+	cutoff := now.Add(-bucketIdleTTL)
 	for key, b := range rl.buckets {
 		if b.lastSeen.Before(cutoff) {
 			delete(rl.buckets, key)
@@ -147,10 +160,20 @@ func (rl *RateLimiter) clientKey(r *http.Request) string {
 	// unlimited supply of fresh identities.
 	if rl.trustProxyHeader {
 		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-			// XFF is "client, proxy1, proxy2"; the originating client is the
-			// first entry.
-			if i := strings.IndexByte(fwd, ','); i >= 0 {
-				fwd = fwd[:i]
+			// Take the RIGHT-most entry, not the left. A standard appending
+			// proxy (nginx's $proxy_add_x_forwarded_for) adds the address it
+			// actually saw to the end, so the right-most entry is the one our
+			// trusted proxy wrote and the only one a client cannot forge — the
+			// client controls everything to its left. Keying on the left-most
+			// entry, as this first did, let an attacker mint a new bucket per
+			// request by varying a header field they own, defeating the limiter
+			// even with the header "trusted".
+			//
+			// This is correct for the documented single-trusted-proxy case. A
+			// chain of N proxies would need the (N+1)-th entry from the right,
+			// which is a trusted-hop count this does not yet take.
+			if i := strings.LastIndexByte(fwd, ','); i >= 0 {
+				fwd = fwd[i+1:]
 			}
 			return strings.TrimSpace(fwd)
 		}

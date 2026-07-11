@@ -48,9 +48,11 @@ so `rojo run "fix X" > fix.patch` captures the change while you watch it happen;
    chosen by what the repository is: `go.mod` runs `gofmt`/`go vet`/`go test`,
    `package.json` with a real test script runs `npm test`, a Python manifest
    runs `pytest`, `Cargo.toml` runs `cargo test`. The repository selects a
-   preset by what it contains; it can never name the command that runs. A
-   toolchain that is not installed, or a repo with no tests, is recorded as a
+   preset by what it contains; it cannot make Rojo invoke an arbitrary binary.
+   A toolchain that is not installed, or a repo with no tests, is recorded as a
    note rather than a false pass — "verified" and "compiled" stay distinct.
+   (Verification does run the repository's own test code — see
+   [Security model](#security-model).)
 6. The reviewer judges whether the change did what was asked. It only ever sees
    a change that already passed the checks — deterministic results outrank model
    judgement, so a change that does not build is not something it gets an
@@ -135,6 +137,33 @@ One process owns the directory at a time. The server takes an exclusive lock on
 `ROJO_DATA_DIR/.lock` at startup, so a second server pointed at the same
 directory refuses to start rather than corrupting shared state — a second
 `make run` fails with a clear message instead of quietly clobbering the first.
+
+## Security model
+
+Rojo runs your repository's own code. Verification exists to run the tests, and
+tests are code: `go test` runs the repo's `_test.go`, `pytest` runs its test
+files and `conftest.py`, `cargo test` runs its `build.rs`, and `npm test` runs
+whatever shell command the repository put in `package.json`'s `scripts.test`.
+The command allowlist stops a repository from making Rojo invoke an arbitrary
+binary like `rm`; it does **not** stop the repository's own test or build code
+from doing whatever it wants. That is inherent to running tests, not a defect.
+
+So the trust boundary is the repository, not the allowlist:
+
+- **Point Rojo at repositories you trust** — code you would run `go test` /
+  `npm test` on yourself. That is the intended model: one trusted local
+  repository.
+- **To verify untrusted code, use the sandbox.** A containerized runner
+  (`internal/execution.DockerRunner`) exists to run verification with no network
+  and bounded CPU/memory. It is deliberately **not** wired in by default —
+  running it needs a mounted Docker socket, which is its own decision — so out of
+  the box, verifying a repository executes that repository's code on the host.
+- **Keep the server off the network** unless you have set `ROJO_AUTH_TOKEN`. The
+  default bind is loopback for exactly this reason: the job endpoint runs code.
+
+None of this is unique to Rojo — every CI system executes the code it tests —
+but it is the thing to understand before pointing it at something you did not
+write.
 
 ## The CLI
 

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Raamia/Rojo/internal/events"
 )
@@ -366,5 +367,20 @@ func TestRenderEvent(t *testing.T) {
 		if !strings.Contains(got, tt.want) {
 			t.Errorf("%s rendered %q, want it to contain %q", tt.event.Type, got, tt.want)
 		}
+	}
+}
+
+func TestOneLine_RuneSafe(t *testing.T) {
+	// A cut that lands mid-rune must not emit invalid UTF-8.
+	got := oneLine(strings.Repeat("世", 100), 60)
+	if !utf8.ValidString(got) {
+		t.Errorf("oneLine produced invalid UTF-8: %q", got)
+	}
+	if r := []rune(got); len(r) != 60 { // 59 kept + the ellipsis
+		t.Errorf("got %d runes, want 60", len(r))
+	}
+	// Short strings pass through untouched.
+	if oneLine("hello", 60) != "hello" {
+		t.Error("short string was altered")
 	}
 }

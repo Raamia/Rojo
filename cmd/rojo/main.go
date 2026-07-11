@@ -344,8 +344,13 @@ func oneID(args []string, stderr io.Writer, cmd string) (string, bool) {
 
 func oneLine(s string, max int) string {
 	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > max {
-		return s[:max-1] + "…"
+	// Count and cut in runes, not bytes: a task or a reviewer's note may be any
+	// language, and slicing a multibyte rune down the middle emits invalid
+	// UTF-8 — a garbled tail in the terminal. max is a display width, so runes
+	// are the right unit anyway.
+	r := []rune(s)
+	if len(r) > max {
+		return string(r[:max-1]) + "…"
 	}
 	return s
 }

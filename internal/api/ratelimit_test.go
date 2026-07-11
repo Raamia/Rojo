@@ -1,9 +1,11 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func okHandler() http.Handler {
@@ -74,7 +76,9 @@ func TestClientKey(t *testing.T) {
 		// XFF is attacker-writable, so by default it is ignored entirely.
 		{"xff ignored by default", "10.0.0.9:80", "198.51.100.2", false, "10.0.0.9"},
 		{"xff honoured when trusted", "10.0.0.9:80", "198.51.100.2", true, "198.51.100.2"},
-		{"trusted xff list takes first, trimmed", "10.0.0.9:80", "198.51.100.2, 70.1.2.3", true, "198.51.100.2"},
+		// The rightmost entry is the one the trusted proxy appended; everything
+		// to its left is client-supplied and forgeable.
+		{"trusted xff list takes rightmost, trimmed", "10.0.0.9:80", "spoofed, 70.1.2.3", true, "70.1.2.3"},
 		{"malformed remote addr falls back whole", "not-an-addr", "", false, "not-an-addr"},
 	}
 	for _, tt := range tests {
@@ -92,5 +96,82 @@ func TestClientKey(t *testing.T) {
 				t.Errorf("clientKey = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// With a trusted appending proxy, the right-most XFF entry is the one the proxy
+// wrote and the only one a client cannot forge — the client owns everything to
+// its left. Keying on the left-most entry let an attacker mint a bucket per
+// request by varying a field they control; the limiter must resist that.
+func TestRateLimiter_TrustedProxyKeysOnTheRightmostXFF(t *testing.T) {
+	rl := NewRateLimiter(1, 0).TrustProxyHeader() // burst 1, no refill
+	h := rl.Middleware()(okHandler())
+
+	allowed := 0
+	for i := 0; i < 50; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs", nil)
+		req.RemoteAddr = "10.0.0.9:5555" // the proxy
+		// Attacker varies the left part; the proxy appended the real client IP.
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("spoof-%d, 203.0.113.7", i))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code == http.StatusOK {
+			allowed++
+		}
+	}
+	if allowed != 1 {
+		t.Errorf("%d requests allowed, want exactly the burst of 1 — the rightmost key held", allowed)
+	}
+}
+
+func TestClientKey_RightmostWhenTrusted(t *testing.T) {
+	rl := NewRateLimiter(1, 1).TrustProxyHeader()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.0.0.9:80"
+	req.Header.Set("X-Forwarded-For", "attacker, middle, 198.51.100.2")
+	if got := rl.clientKey(req); got != "198.51.100.2" {
+		t.Errorf("clientKey = %q, want the rightmost 198.51.100.2", got)
+	}
+}
+
+// Idle buckets must be reclaimed by elapsed time, not only by a fresh flood of
+// distinct IPs. Once traffic settles to a recurring set, no new buckets are
+// inserted, so an insert-only trigger would never sweep again.
+func TestRateLimiter_IdleBucketsEvictedByTime(t *testing.T) {
+	rl := NewRateLimiter(10, 100)
+	h := rl.Middleware()(okHandler())
+
+	// A burst of one-shot clients that then never return.
+	for i := 0; i < 20; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs", nil)
+		req.RemoteAddr = fmt.Sprintf("192.0.2.%d:1000", i)
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	// Force them all idle and push the last sweep past the TTL, without any new
+	// distinct IPs arriving.
+	rl.mu.Lock()
+	past := time.Now().Add(-2 * bucketIdleTTL)
+	for _, b := range rl.buckets {
+		b.lastSeen = past
+	}
+	rl.lastSwept = past
+	before := len(rl.buckets)
+	rl.mu.Unlock()
+
+	// A single request from an already-known client — no insert — must still
+	// trigger the time-based sweep.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs", nil)
+	req.RemoteAddr = "192.0.2.0:1000"
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	rl.mu.Lock()
+	after := len(rl.buckets)
+	rl.mu.Unlock()
+	if before < 20 {
+		t.Fatalf("setup wrong: %d buckets", before)
+	}
+	if after > 1 {
+		t.Errorf("%d buckets after a time-based sweep, want the idle ones gone", after)
 	}
 }

@@ -12,10 +12,26 @@ import (
 	"github.com/Raamia/Rojo/internal/execution"
 )
 
-// AutoCommands is every command a detected check can run. The verification
+// AutoCommands is every binary a detected check can invoke. The verification
 // runner's allowlist has to cover exactly this set — detection chooses *which*
-// of these run, never anything outside it, so a hostile repository can select a
-// preset but cannot name a command.
+// of these run, never anything outside it, so a repository can select a preset
+// but cannot make Rojo invoke an arbitrary binary.
+//
+// SECURITY — read this before trusting the allowlist too far. It bounds the
+// top-level binary and nothing beyond it. Verification's whole job is to run
+// the repository's tests, and tests are code: `go test` runs the repo's
+// _test.go, `pytest` runs its test files and conftest.py, `cargo test` runs
+// its build.rs, and `npm test` runs whatever shell string the repo put in
+// package.json's "scripts.test" — that last one is the bluntest, but every
+// language here executes repo-controlled code by design. The allowlist stops a
+// repo from having Rojo run `rm`; it does not, and cannot, stop the repo's own
+// test code from doing so.
+//
+// The actual containment for untrusted input is the sandbox: the Docker runner
+// (no network, resource-limited), which is deliberately not wired by default.
+// Rojo's threat model is one trusted local repository — point it at code you
+// would run `go test` on yourself. Verifying an untrusted repository on the
+// host, outside the sandbox, is running that repository's code on your machine.
 func AutoCommands() []string {
 	return []string{"go", "gofmt", "npm", "pytest", "cargo"}
 }
@@ -117,6 +133,11 @@ func (a *AutoRunner) detect(dir string) ([]Check, []Result) {
 		case !installed("npm"):
 			note("npm", "package.json found but npm is not installed on this host; Node checks skipped")
 		default:
+			// `npm test` runs package.json's "scripts.test" verbatim — an
+			// arbitrary shell string the repository controls. That is how Node
+			// testing works everywhere, and it is fine for the trusted repo
+			// Rojo is meant to run; it is also why an untrusted repo must be
+			// verified in the sandbox, not on the host. See AutoCommands.
 			checks = append(checks, Check{
 				Name: "npm test", Command: "npm", Args: []string{"test", "--silent"},
 			})

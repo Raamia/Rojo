@@ -70,9 +70,11 @@ func main() {
 
 	// Verification gets its own runner and allowlist: it may invoke test
 	// toolchains, never git, and vice versa. The allowlist is exactly the set
-	// of commands detection can choose from — the repository under test picks
-	// which preset applies (by containing go.mod, package.json, ...) but can
-	// never name a command.
+	// of binaries detection can choose from — the repository under test picks
+	// which preset applies (by containing go.mod, package.json, ...) but cannot
+	// make Rojo invoke an arbitrary binary. It does still run the repo's own
+	// test code, which is why untrusted repos need the sandbox; see
+	// verification.AutoCommands.
 	verifyRunner := execution.NewSafeRunner(
 		execution.NewExecRunner(),
 		execution.NewAllowlist(verification.AutoCommands()...),
