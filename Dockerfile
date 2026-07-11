@@ -19,9 +19,16 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/rojo ./cmd/api
 
 FROM golang:1.25-alpine
-# git for worktrees; the Go toolchain comes with the base image. Both are on the
-# command allowlists in cmd/api/main.go — nothing else is executable by a job,
-# so nothing else needs installing.
+# git for worktrees; the Go toolchain comes with the base image.
+#
+# This image verifies Go repositories. Verification also detects Node, Python
+# and Rust repositories, but their toolchains are deliberately not installed —
+# each would add hundreds of megabytes, and the container's purpose is one
+# trusted Go repository. A non-Go repo mounted here is not broken: AutoRunner
+# records "tool not installed" as a skipped check rather than a failure. To
+# verify another language in a container, add its toolchain to a derived image;
+# to verify several, run the server on a host that has them (the common case,
+# since the model is one trusted local repository).
 RUN apk add --no-cache git ca-certificates
 
 # Jobs run as a non-root user. This is not a sandbox — the threat model is a
