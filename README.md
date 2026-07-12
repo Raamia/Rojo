@@ -27,8 +27,9 @@ bin/rojo run "add a retry with backoff to the HTTP client"
 The server listens on `127.0.0.1:8080` by default — loopback, so only this
 machine can reach it — and writes to `./rojo-data`. Jobs, their event history,
 and their artifacts persist there, so everything survives a restart out of the
-box. Set `ANTHROPIC_API_KEY` before starting the server to enable the planner,
-implementor and reviewer; without it a job still isolates, verifies and reports.
+box. Set `ANTHROPIC_API_KEY` **or** `OPENAI_API_KEY` before starting the server
+to enable the planner, implementor and reviewer; without either, a job still
+isolates, verifies and reports.
 
 `rojo run` streams progress to stderr and writes the finished patch to stdout,
 so `rojo run "fix X" > fix.patch` captures the change while you watch it happen;
@@ -37,8 +38,8 @@ so `rojo run "fix X" > fix.patch` captures the change while you watch it happen;
 ## What a job does today
 
 1. The job is validated, persisted and queued.
-2. If `ANTHROPIC_API_KEY` is set, the planner turns the task into a structured
-   plan. Without a key this step is skipped and the rest still runs.
+2. If a model key is set, the planner turns the task into a structured plan.
+   Without a key this step is skipped and the rest still runs.
 3. A worker creates an isolated git worktree on a `rojo/job/<id>` branch. The
    source repository's working tree and tracked files are never modified.
 4. If a key is set, the implementor proposes structured file operations and the
@@ -90,8 +91,10 @@ still has its worktree reclaimed.
 | `ROJO_SHUTDOWN_TIMEOUT`   | `15s`                       | Graceful shutdown deadline        |
 | `ROJO_JOB_TIMEOUT`        | `30m`                       | Maximum wall-clock time for one job |
 | `ROJO_FANOUT_VARIANTS`    | `1`                         | Attempts per job, each in its own worktree (max 8) |
-| `ANTHROPIC_API_KEY`       | *(unset → agents disabled)* | API key for the planner, implementor and reviewer |
-| `ROJO_MODEL`              | `claude-opus-4-8`           | Model the agents use |
+| `ANTHROPIC_API_KEY`       | *(unset)*                   | Claude key for the planner, implementor and reviewer |
+| `OPENAI_API_KEY`          | *(unset)*                   | OpenAI key, as an alternative backend. With neither key set, the agents are disabled |
+| `ROJO_PROVIDER`           | *(inferred from the key set)* | `anthropic` or `openai`. Only needed when both keys are present |
+| `ROJO_MODEL`              | provider default            | Model the agents use (`claude-opus-4-8` / `gpt-5.2`) |
 | `ROJO_AUTH_TOKEN`         | *(unset → **auth disabled**)* | Bearer token required on every route except `/healthz` |
 | `ROJO_RATE_LIMIT_BURST`   | `30`                        | Token-bucket capacity per client IP |
 | `ROJO_RATE_LIMIT_RPS`     | `5`                         | Token refill per second           |
@@ -137,6 +140,35 @@ One process owns the directory at a time. The server takes an exclusive lock on
 `ROJO_DATA_DIR/.lock` at startup, so a second server pointed at the same
 directory refuses to start rather than corrupting shared state — a second
 `make run` fails with a clear message instead of quietly clobbering the first.
+
+## Model providers
+
+Rojo talks to either Claude or OpenAI. The planner, implementor and reviewer all
+depend on one small interface (`model.Client`), so they never learn which
+provider answered — switching is configuration, not code.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...   # Claude (default model: claude-opus-4-8)
+export OPENAI_API_KEY=sk-...          # OpenAI (default model: gpt-5.2)
+```
+
+With one key set, that provider is used — no other configuration needed. With
+both set, Claude wins unless you say otherwise, so adding an `OPENAI_API_KEY` to
+an environment never silently changes what an existing deployment runs:
+
+```bash
+export ROJO_PROVIDER=openai           # explicit choice
+export ROJO_MODEL=gpt-4.1             # optional: override the provider's default
+```
+
+A `ROJO_PROVIDER` that names an unknown provider, or one whose key is missing,
+refuses to start rather than quietly falling back to the other.
+
+Both clients use their vendor's official Go SDK, and both are tested against a
+stubbed endpoint through the real SDK — the request that goes on the wire is
+asserted, not assumed. The pipeline tests run end-to-end on both and compare the
+resulting patches, so a provider-specific quirk would surface as a test failure
+rather than in production.
 
 ## Security model
 

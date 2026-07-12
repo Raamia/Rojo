@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -88,5 +89,83 @@ func TestGetEnvBool_AcceptsNaturalSpellings(t *testing.T) {
 	os.Unsetenv("ROJO_TRUST_PROXY_HEADER")
 	if !getEnvBool("ROJO_TRUST_PROXY_HEADER", true) {
 		t.Error("unset should use the fallback")
+	}
+}
+
+// Which provider answers is inferred from whichever key is set, because asking
+// someone to set two variables to say one thing is a needless step.
+func TestResolvedProvider(t *testing.T) {
+	tests := []struct {
+		name           string
+		provider       string
+		anthropic, oai string
+		want           string
+	}{
+		{"no keys means agents are disabled", "", "", "", ""},
+		{"anthropic key alone", "", "sk-ant", "", ProviderAnthropic},
+		{"openai key alone", "", "", "sk-oai", ProviderOpenAI},
+		// Anthropic wins a tie only so an existing deployment does not change
+		// behaviour the day an OPENAI_API_KEY appears in the environment.
+		{"both keys default to anthropic", "", "sk-ant", "sk-oai", ProviderAnthropic},
+		{"explicit openai overrides the tie", ProviderOpenAI, "sk-ant", "sk-oai", ProviderOpenAI},
+		{"explicit anthropic with only its key", ProviderAnthropic, "sk-ant", "", ProviderAnthropic},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := Config{Provider: tt.provider, AnthropicAPIKey: tt.anthropic, OpenAIAPIKey: tt.oai}
+			if got := c.ResolvedProvider(); got != tt.want {
+				t.Errorf("ResolvedProvider = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProviderAPIKey_MatchesTheResolvedProvider(t *testing.T) {
+	c := Config{Provider: ProviderOpenAI, AnthropicAPIKey: "sk-ant", OpenAIAPIKey: "sk-oai"}
+	if got := c.ProviderAPIKey(); got != "sk-oai" {
+		t.Errorf("ProviderAPIKey = %q, want the OpenAI key", got)
+	}
+	if got := (Config{AnthropicAPIKey: "sk-ant"}).ProviderAPIKey(); got != "sk-ant" {
+		t.Errorf("ProviderAPIKey = %q, want the Anthropic key", got)
+	}
+	if got := (Config{}).ProviderAPIKey(); got != "" {
+		t.Errorf("ProviderAPIKey = %q, want empty with no keys", got)
+	}
+}
+
+// A typo like "opanai" must not silently fall back to inference and run jobs
+// against a model the operator did not choose.
+func TestValidate_RejectsAnUnknownProvider(t *testing.T) {
+	c := validConfig()
+	c.Provider = "opanai"
+	c.AnthropicAPIKey = "sk-ant"
+	if err := c.Validate(); err == nil {
+		t.Fatal("an unknown provider was accepted")
+	} else if !strings.Contains(err.Error(), "ROJO_PROVIDER") {
+		t.Errorf("error %q should name the variable", err)
+	}
+}
+
+// Naming a provider whose key is missing is worth catching at startup, not one
+// agent call into the first job.
+func TestValidate_RejectsAProviderWithNoKey(t *testing.T) {
+	c := validConfig()
+	c.Provider = ProviderOpenAI // no OPENAI_API_KEY set
+	if err := c.Validate(); err == nil {
+		t.Fatal("a provider with no key was accepted")
+	}
+}
+
+func TestValidate_AcceptsInferredProviders(t *testing.T) {
+	for _, key := range []string{"anthropic", "openai"} {
+		c := validConfig()
+		if key == "anthropic" {
+			c.AnthropicAPIKey = "sk-ant"
+		} else {
+			c.OpenAIAPIKey = "sk-oai"
+		}
+		if err := c.Validate(); err != nil {
+			t.Errorf("%s inferred config rejected: %v", key, err)
+		}
 	}
 }

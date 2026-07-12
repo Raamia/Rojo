@@ -21,10 +21,14 @@ type Config struct {
 	JobTimeout      time.Duration
 	FanoutVariants  int
 	AnthropicAPIKey string
-	ModelID         string
-	AuthToken       string
-	RateLimitBurst  int
-	RateLimitRPS    float64
+	OpenAIAPIKey    string
+	// Provider selects which model backend the agents use: "anthropic",
+	// "openai", or "" to infer from whichever key is set.
+	Provider       string
+	ModelID        string
+	AuthToken      string
+	RateLimitBurst int
+	RateLimitRPS   float64
 	// TrustProxyHeader keys rate limiting by X-Forwarded-For. Only enable it
 	// when a trusted reverse proxy is what connects to this server; from an
 	// untrusted peer the header is attacker-chosen and defeats the limiter.
@@ -42,6 +46,8 @@ func Load() (Config, error) {
 		JobTimeout:       getEnvDuration("ROJO_JOB_TIMEOUT", 30*time.Minute),
 		FanoutVariants:   getEnvInt("ROJO_FANOUT_VARIANTS", 1),
 		AnthropicAPIKey:  os.Getenv("ANTHROPIC_API_KEY"),
+		OpenAIAPIKey:     os.Getenv("OPENAI_API_KEY"),
+		Provider:         strings.ToLower(strings.TrimSpace(getEnv("ROJO_PROVIDER", ""))),
 		ModelID:          getEnv("ROJO_MODEL", ""),
 		AuthToken:        os.Getenv("ROJO_AUTH_TOKEN"),
 		RateLimitBurst:   getEnvInt("ROJO_RATE_LIMIT_BURST", 30),
@@ -97,9 +103,11 @@ func (c Config) LogValue() slog.Value {
 		slog.Int("fanout_variants", c.FanoutVariants),
 		slog.Int("rate_limit_burst", c.RateLimitBurst),
 		slog.Float64("rate_limit_rps", c.RateLimitRPS),
+		slog.String("provider", c.ResolvedProvider()),
 		slog.String("model", c.ModelID),
 		slog.String("auth_token", redacted(c.AuthToken)),
 		slog.String("anthropic_api_key", redacted(c.AnthropicAPIKey)),
+		slog.String("openai_api_key", redacted(c.OpenAIAPIKey)),
 	)
 }
 
@@ -114,6 +122,47 @@ func redacted(secret string) string {
 		return "[unset]"
 	}
 	return "[set]"
+}
+
+// Providers Rojo can talk to. The agents are provider-agnostic — they depend
+// on model.Client — so this is the only place the choice exists.
+const (
+	ProviderAnthropic = "anthropic"
+	ProviderOpenAI    = "openai"
+)
+
+// ResolvedProvider reports which backend the agents will use, or "" when no key
+// is configured and the model-driven stages are disabled.
+//
+// With ROJO_PROVIDER unset the answer is inferred from whichever key is
+// present, because that is nearly always unambiguous and asking someone to set
+// two variables to say one thing is a needless step. Anthropic wins a tie only
+// so the behaviour of an existing deployment does not change the day an
+// OPENAI_API_KEY happens to appear in the environment; ROJO_PROVIDER is how you
+// say otherwise.
+func (c Config) ResolvedProvider() string {
+	switch c.Provider {
+	case ProviderAnthropic, ProviderOpenAI:
+		return c.Provider
+	}
+	if c.AnthropicAPIKey != "" {
+		return ProviderAnthropic
+	}
+	if c.OpenAIAPIKey != "" {
+		return ProviderOpenAI
+	}
+	return ""
+}
+
+// ProviderAPIKey returns the key for the resolved provider.
+func (c Config) ProviderAPIKey() string {
+	switch c.ResolvedProvider() {
+	case ProviderAnthropic:
+		return c.AnthropicAPIKey
+	case ProviderOpenAI:
+		return c.OpenAIAPIKey
+	}
+	return ""
 }
 
 func (c Config) Validate() error {
@@ -143,6 +192,19 @@ func (c Config) Validate() error {
 	}
 	if c.FanoutVariants < 1 {
 		return fmt.Errorf("ROJO_FANOUT_VARIANTS must be at least 1, got %d", c.FanoutVariants)
+	}
+	// An unrecognised provider is refused rather than quietly ignored: falling
+	// back to inference would run jobs against a model the operator did not
+	// choose, and a typo like "opanai" would look like it worked.
+	switch c.Provider {
+	case "", ProviderAnthropic, ProviderOpenAI:
+	default:
+		return fmt.Errorf("ROJO_PROVIDER must be %q or %q, got %q", ProviderAnthropic, ProviderOpenAI, c.Provider)
+	}
+	// Naming a provider whose key is missing is a misconfiguration worth
+	// catching at startup, not one agent call into the first job.
+	if c.Provider != "" && c.ProviderAPIKey() == "" {
+		return fmt.Errorf("ROJO_PROVIDER=%s but its API key is not set", c.Provider)
 	}
 	return nil
 }

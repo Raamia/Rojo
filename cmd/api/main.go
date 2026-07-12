@@ -90,23 +90,26 @@ func main() {
 	processor.Verifier = verifier
 	processor.Artifacts = store
 
-	// The planner only runs when a model is configured. Without a key the
-	// pipeline still does useful work — isolate, verify, report — it just does
-	// not plan, so an unset key degrades the service rather than breaking it.
-	if cfg.AnthropicAPIKey != "" {
-		modelClient := metrics.InstrumentModel(model.NewAnthropicClient(model.AnthropicOptions{
-			APIKey:  cfg.AnthropicAPIKey,
-			Model:   cfg.ModelID,
-			Timeout: cfg.JobTimeout,
-		}), reg)
+	// The agents only run when a model is configured. Without a key the pipeline
+	// still does useful work — isolate, verify, report — it just does not plan,
+	// so an unset key degrades the service rather than breaking it.
+	//
+	// Which provider answers is decided here and nowhere else: everything
+	// downstream depends on model.Client, so the planner, implementor and
+	// reviewer never learn who they are talking to.
+	if provider := cfg.ResolvedProvider(); provider != "" {
+		modelClient := metrics.InstrumentModel(newModelClient(cfg, provider), reg)
 		processor.Planner = planner.NewPlanner(modelClient)
 		processor.Context = repocontext.NewSelector(gitRunner)
 		processor.Implementor = implementor.NewAgent(modelClient)
 		processor.Reviewer = reviewer.New(modelClient)
-		logger.Info("agents enabled", "model", modelName(cfg.ModelID),
+		logger.Info("agents enabled",
+			"provider", provider,
+			"model", modelName(cfg.ModelID, provider),
 			"max_revisions", orchestration.MaxRevisions)
 	} else {
-		logger.Warn("ANTHROPIC_API_KEY not set: planning, implementation and review are disabled")
+		logger.Warn("no model API key set (ANTHROPIC_API_KEY or OPENAI_API_KEY): " +
+			"planning, implementation and review are disabled")
 	}
 	processor.JobTimeout = cfg.JobTimeout
 	processor.Variants = cfg.FanoutVariants
@@ -246,9 +249,32 @@ func main() {
 
 // modelName reports the model that will actually be used, so the startup log
 // is accurate when ROJO_MODEL is unset and the client falls back to its default.
-func modelName(configured string) string {
+// newModelClient builds the backend for the resolved provider. It is the only
+// place in the program that names a concrete client type.
+func newModelClient(cfg config.Config, provider string) model.Client {
+	if provider == config.ProviderOpenAI {
+		return model.NewOpenAIClient(model.OpenAIOptions{
+			APIKey:  cfg.OpenAIAPIKey,
+			Model:   cfg.ModelID,
+			Timeout: cfg.JobTimeout,
+		})
+	}
+	return model.NewAnthropicClient(model.AnthropicOptions{
+		APIKey:  cfg.AnthropicAPIKey,
+		Model:   cfg.ModelID,
+		Timeout: cfg.JobTimeout,
+	})
+}
+
+// modelName reports the model that will actually be used, so the startup log
+// shows the resolved default rather than an empty string when ROJO_MODEL is
+// unset — the two providers have different defaults.
+func modelName(configured, provider string) string {
 	if configured != "" {
 		return configured
+	}
+	if provider == config.ProviderOpenAI {
+		return string(model.DefaultOpenAIModel)
 	}
 	return string(model.DefaultModel)
 }
