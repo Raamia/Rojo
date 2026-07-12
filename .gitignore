@@ -1,0 +1,31 @@
+# This file is tracked on purpose. It used to ignore itself, which meant a
+# clone got no ignore rules at all — including the .env rule below, on a
+# repository whose .env holds API keys.
+commits.md
+
+# Go
+*.exe
+*.test
+*.out
+/bin/
+/dist/
+vendor/
+
+# Env
+.env
+.env.local
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+
+# Runtime state. ROJO_DATA_DIR defaults to ./rojo-data, so `make run` from the
+# repository root creates this; the jobs it holds are local state, not source.
+/rojo-data/
+/worktrees/
+
+# Local testing log
+testing.md
+fixes.md
+production-readiness.md

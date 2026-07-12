@@ -33,6 +33,29 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
+	// A .env in the working directory fills in anything the real environment
+	// does not already set, so the API keys and settings can live in a file
+	// instead of being exported into every shell. Read before config.Load, so
+	// the file can supply any variable; ROJO_ENV_FILE points somewhere else.
+	envPath := os.Getenv("ROJO_ENV_FILE")
+	if envPath == "" {
+		envPath = config.DefaultEnvFile
+	}
+	envResult, err := config.LoadEnvFile(envPath)
+	if err != nil {
+		// A file that exists but cannot be read is a real misconfiguration:
+		// starting anyway would silently run without the keys it holds.
+		logger.Error("read env file", "path", envPath, "err", err)
+		os.Exit(2)
+	}
+	if envResult.Path != "" {
+		logger.Info("env file loaded", "env_file", envResult)
+		if envResult.WorldReadable {
+			logger.Warn("env file is readable by other users on this machine",
+				"path", envResult.Path, "fix", "chmod 600 "+envResult.Path)
+		}
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		logger.Error("invalid config", "err", err)

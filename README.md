@@ -152,6 +152,13 @@ export ANTHROPIC_API_KEY=sk-ant-...   # Claude (default model: claude-opus-4-8)
 export OPENAI_API_KEY=sk-...          # OpenAI (default model: gpt-5.2)
 ```
 
+Or put them in a `.env` beside the server — `cp .env.example .env`, fill it in,
+`chmod 600 .env`. It is read at startup and is gitignored. **Real environment
+variables always win over the file**, so a container or systemd unit that sets
+them keeps working unchanged; the file only fills gaps. `ROJO_ENV_FILE` points
+somewhere else. Nothing from the file is ever printed — the startup log names
+the variables it set, never their values.
+
 With one key set, that provider is used — no other configuration needed. With
 both set, Claude wins unless you say otherwise, so adding an `OPENAI_API_KEY` to
 an environment never silently changes what an existing deployment runs:
