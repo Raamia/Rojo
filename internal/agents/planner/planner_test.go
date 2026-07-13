@@ -52,3 +52,26 @@ func TestPlanner_EmptyTask(t *testing.T) {
 		t.Errorf("got %v, want ErrInvalidPlan", err)
 	}
 }
+
+// The first live GPT-5.2 run returned a plan whose step ids were numbers, and
+// the job died in the planning step with "cannot unmarshal number into Go
+// struct field Step.steps.id of type string". A numbered plan is a good plan;
+// failing the job over the quoting throws away the call that produced it.
+func TestPlan_AcceptsNumericStepIDs(t *testing.T) {
+	reply := `{"summary":"add a greeting","steps":[
+		{"id":1,"description":"add Greet to greet.go"},
+		{"id":2,"description":"call it from main"}
+	]}`
+	p := NewPlanner(&model.FakeClient{Reply: reply})
+
+	got, err := p.Plan(context.Background(), Request{Task: "add a greeting", RepoPath: "/tmp/r"})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if len(got.Steps) != 2 {
+		t.Fatalf("got %d steps, want 2", len(got.Steps))
+	}
+	if got.Steps[0].ID.String() != "1" || got.Steps[1].ID.String() != "2" {
+		t.Errorf("ids = %q, %q; want \"1\", \"2\"", got.Steps[0].ID, got.Steps[1].ID)
+	}
+}

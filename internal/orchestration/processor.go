@@ -186,6 +186,7 @@ func (p *Processor) Process(ctx context.Context, jobID string) (err error) {
 	var (
 		plan         planner.Plan
 		contextFiles []string
+		repoTree     []string
 	)
 
 	var cands []*candidate
@@ -271,6 +272,8 @@ func (p *Processor) Process(ctx context.Context, jobID string) (err error) {
 				} else {
 					req.Files = sel.Files
 					contextFiles = sel.Files
+					repoTree = sel.Tree
+					req.Tree = sel.Tree
 					log.Info("repo context selected",
 						"files", len(sel.Files), "tracked", sel.TotalTracked, "keywords", sel.Keywords)
 				}
@@ -306,7 +309,7 @@ func (p *Processor) Process(ctx context.Context, jobID string) (err error) {
 		}
 
 		if next == jobs.StatusImplementing && p.Implementor != nil && len(cands) > 0 {
-			if err := p.implement(jobCtx, log, jobID, job, plan, contextFiles, cands, feedback); err != nil {
+			if err := p.implement(jobCtx, log, jobID, job, plan, contextFiles, repoTree, cands, feedback); err != nil {
 				return p.markFailed(job, err)
 			}
 		}
@@ -400,7 +403,7 @@ func (p *Processor) Process(ctx context.Context, jobID string) (err error) {
 // unlucky sample must not sink the whole attempt.
 func (p *Processor) implement(
 	ctx context.Context, log *slog.Logger, jobID string, job *jobs.Job,
-	plan planner.Plan, contextFiles []string, cands []*candidate, feedback string,
+	plan planner.Plan, contextFiles, repoTree []string, cands []*candidate, feedback string,
 ) error {
 	var lastErr error
 	implemented := 0
@@ -423,6 +426,7 @@ func (p *Processor) implement(
 			// asked to correct, and a file it created is in neither the
 			// original selection nor the source repository.
 			Files:    readSources(c.ws.Path, mergePaths(contextFiles, c.touched)),
+			Tree:     repoTree,
 			Feedback: feedback,
 		}
 		ops, err := p.Implementor.Propose(ctx, req)

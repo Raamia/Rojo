@@ -274,4 +274,3 @@ make check   # the same gates CI runs: gofmt, go vet, go test -race
 ```
 
 CI runs those on every push, plus `govulncheck` and a Docker image build.
-

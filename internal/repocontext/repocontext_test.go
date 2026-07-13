@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -242,5 +243,77 @@ func TestSelect_EmptyRepoIsNotAnError(t *testing.T) {
 func TestSelect_NonRepoIsAnError(t *testing.T) {
 	if _, err := newSelector().Select(context.Background(), t.TempDir(), "task"); err == nil {
 		t.Fatal("expected an error for a directory that is not a git repository")
+	}
+}
+
+// Generic programming vocabulary matches every file in a code repository, so
+// it is worth what "the" is worth — and worse, because the keyword budget is
+// finite and noise crowds out signal. A live run lost "main" this way: the
+// task "add a Greet function that takes a name string and returns a greeting,
+// and call it from main" spent every slot on function/takes/string/returns/call
+// and never searched for the one word that located the file to edit.
+func TestKeywords_DropsGenericCodeWords(t *testing.T) {
+	got := Keywords("add a Greet function that takes a name string and returns a greeting, and call it from main")
+
+	joined := strings.Join(got, ",")
+	for _, noise := range []string{"function", "takes", "string", "returns", "call"} {
+		if strings.Contains(joined, noise) {
+			t.Errorf("generic word %q survived: %v", noise, got)
+		}
+	}
+	// The two words that actually locate the change must be present.
+	for _, want := range []string{"greet", "main"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("keyword %q is missing, which is how the wrong file gets edited: %v", want, got)
+		}
+	}
+}
+
+// Ranked files say what is worth reading; the tree says what exists. Without
+// it a model cannot tell ./main.go from ./cmd/tutorial/main.go, and a confident
+// guess lands the change somewhere that compiles but is wrong.
+func TestSelect_IncludesTheRepositoryTree(t *testing.T) {
+	repo := newRepo(t, map[string]string{
+		"go.mod":               "module probe\n\ngo 1.25\n",
+		"cmd/tutorial/main.go": "package main\n\nfunc main() {}\n",
+		"internal/thing.go":    "package internal\n",
+	})
+
+	got, err := newSelector().Select(context.Background(), repo, "something unrelated zzz")
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if len(got.Tree) != 3 {
+		t.Fatalf("tree has %d paths, want every tracked file: %v", len(got.Tree), got.Tree)
+	}
+	var found bool
+	for _, p := range got.Tree {
+		if p == "cmd/tutorial/main.go" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the tree does not show where main lives: %v", got.Tree)
+	}
+}
+
+// A large repository must not spend the whole context window on paths.
+func TestSelect_TreeIsCapped(t *testing.T) {
+	files := map[string]string{"go.mod": "module probe\n"}
+	for i := 0; i < DefaultMaxTreePaths+50; i++ {
+		files[filepath.Join("pkg", "f"+strconv.Itoa(i)+".go")] = "package pkg\n"
+	}
+	repo := newRepo(t, files)
+
+	got, err := newSelector().Select(context.Background(), repo, "anything")
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if len(got.Tree) > DefaultMaxTreePaths {
+		t.Errorf("tree has %d paths, cap is %d", len(got.Tree), DefaultMaxTreePaths)
+	}
+	// TotalTracked still tells the truth about the repository's real size.
+	if got.TotalTracked <= DefaultMaxTreePaths {
+		t.Errorf("TotalTracked = %d, want the real count", got.TotalTracked)
 	}
 }

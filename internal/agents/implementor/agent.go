@@ -28,6 +28,9 @@ type Request struct {
 	Task  string       `json:"task"`
 	Plan  planner.Plan `json:"plan"`
 	Files []SourceFile `json:"files,omitempty"`
+	// Tree is every path the repository contains, so a change lands in the file
+	// that should hold it rather than a new one that merely compiles.
+	Tree []string `json:"repository_files,omitempty"`
 	// Feedback carries a reviewer's notes from a previous attempt, so a
 	// revision knows what was wrong rather than starting over blind.
 	Feedback string `json:"prior_feedback,omitempty"`
@@ -57,6 +60,10 @@ Rules:
 - For "write", "content" must be the COMPLETE new contents of the file, not a patch or a fragment.
 - For "delete", omit "content".
 - Only include files you are actually changing.
+- "repository_files" lists every file that exists, and "files" gives the
+  contents of the relevant ones. Edit those paths. Creating a new file when an
+  existing one is the right home produces a change that compiles and is still
+  wrong — check the list before inventing a path.
 - The result must compile and pass the existing tests.`
 
 // Propose asks the model for the operations that would carry out the plan.

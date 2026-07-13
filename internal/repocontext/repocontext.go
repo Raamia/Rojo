@@ -23,7 +23,7 @@ import (
 // paid in tokens on every planning call, so the caps are deliberately modest.
 const (
 	DefaultMaxFiles    = 40
-	DefaultMaxKeywords = 8
+	DefaultMaxKeywords = 12
 )
 
 // manifests are always worth including: they name the language, the module,
@@ -57,12 +57,40 @@ var stopwords = map[string]bool{
 	"do": true, "does": true, "did": true, "done": true, "now": true,
 	"remove": true, "removes": true, "create": true, "creates": true,
 	"implement": true, "implements": true, "support": true, "handle": true,
+	// Generic programming vocabulary. In a code repository these match almost
+	// every file, which makes them worth exactly as much as "the" — and worse
+	// than useless, because they crowd real signal out of the keyword budget.
+	// A live run lost "main" to this: "add a Greet function that takes a name
+	// string and returns a greeting, and call it from main" spent all eight
+	// slots on function/takes/string/returns/call and never searched for the
+	// one word that would have found cmd/tutorial/main.go.
+	"function": true, "functions": true, "func": true,
+	"method": true, "methods": true, "parameter": true, "parameters": true,
+	"argument": true, "arguments": true, "takes": true, "taking": true,
+	"return": true, "returns": true, "returning": true,
+	"call": true, "calls": true, "calling": true, "called": true,
+	"string": true, "strings": true, "bool": true, "boolean": true,
+	"code": true, "line": true, "lines": true,
 }
+
+// DefaultMaxTreePaths caps the file list handed to a model. Paths are cheap —
+// a few hundred cost a couple of thousand tokens — and knowing the layout is
+// what stops a model inventing a plausible-but-wrong location for its change.
+const DefaultMaxTreePaths = 300
 
 // Context is what gets handed to the planner.
 type Context struct {
 	// Files are repository-relative paths, most relevant first.
 	Files []string
+	// Tree is every path the repository tracks, capped at DefaultMaxTreePaths.
+	//
+	// Keyword ranking decides which files are worth sending in full; this is
+	// the map that says what exists at all. Without it a model asked to "call
+	// it from main" cannot tell whether main lives at ./main.go or
+	// ./cmd/tutorial/main.go, and a confident guess produces a change in the
+	// wrong place that still compiles — which the gate cannot catch and a
+	// reviewer, seeing only the diff, approves. Observed on the first live run.
+	Tree []string
 	// Keywords are the terms extracted from the task and searched for. Returned
 	// so a caller can see why these files were chosen.
 	Keywords []string
@@ -101,6 +129,10 @@ func (s *Selector) Select(ctx context.Context, repoPath, task string) (Context, 
 	}
 
 	out := Context{Keywords: Keywords(task), TotalTracked: len(tracked)}
+	out.Tree = tracked
+	if len(out.Tree) > DefaultMaxTreePaths {
+		out.Tree = out.Tree[:DefaultMaxTreePaths]
+	}
 	if len(tracked) == 0 {
 		return out, nil
 	}
