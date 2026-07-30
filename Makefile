@@ -1,9 +1,13 @@
 .PHONY: build test race run lint fmt check docker docker-run
 
-# Both binaries: the server and the CLI that talks to it.
+# Three binaries: the server, the CLI that talks to it, and the MCP server.
+#
+# rojo-mcp shares no state with the other two — no data directory, no lock, no
+# API key — so it runs beside a running rojo-api or entirely on its own.
 build:
 	go build -o bin/rojo-api ./cmd/api
 	go build -o bin/rojo ./cmd/rojo
+	go build -o bin/rojo-mcp ./cmd/rojo-mcp
 
 test:
 	go test ./...
