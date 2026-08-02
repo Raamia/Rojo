@@ -1,0 +1,5 @@
+{
+  "name": "return-error",
+  "difficulty": "medium",
+  "task": "ParsePort currently swallows the parse failure and returns 0. Change it to return (int, error) so the caller can see why parsing failed. Update any callers and tests so everything still compiles and passes."
+}

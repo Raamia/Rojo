@@ -1,0 +1,5 @@
+{
+  "name": "add-function",
+  "difficulty": "easy",
+  "task": "Add a Farewell function next to Greet. It takes a name string and returns \"goodbye \" followed by that name."
+}

@@ -1,0 +1,3 @@
+module benchcase
+
+go 1.25

@@ -1,0 +1,6 @@
+{
+  "name": "fix-failing-test",
+  "difficulty": "medium",
+  "task": "TestSum is failing. Find and fix the bug in the Sum function so that it returns the total of all the numbers it is given. Do not change the test.",
+  "starts_red": true
+}

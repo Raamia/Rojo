@@ -1,4 +1,4 @@
-.PHONY: build test race run lint fmt check docker docker-run
+.PHONY: build test race run lint fmt check bench docker docker-run
 
 # Three binaries: the server, the CLI that talks to it, and the MCP server.
 #
@@ -8,6 +8,18 @@ build:
 	go build -o bin/rojo-api ./cmd/api
 	go build -o bin/rojo ./cmd/rojo
 	go build -o bin/rojo-mcp ./cmd/rojo-mcp
+	go build -o bin/rojo-bench ./cmd/rojo-bench
+
+# Measure the pipeline against the fixed case set. Needs a running server, and
+# a model key on that server for the numbers to mean anything: with no key the
+# agents are disabled, every case reports a false success, and the run proves
+# only that the harness works.
+#
+# Prices are passed in rather than baked in, because a hardcoded rate silently
+# becomes a wrong number the next time a provider changes one.
+bench:
+	go build -o bin/rojo-bench ./cmd/rojo-bench
+	bin/rojo-bench -json bench-report.json $(BENCH_FLAGS)
 
 test:
 	go test ./...

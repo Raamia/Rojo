@@ -1,0 +1,5 @@
+{
+  "name": "add-validation",
+  "difficulty": "easy",
+  "task": "Config.Validate currently only checks Name. Add a check that rejects a negative Timeout by returning an error whose message contains the word timeout."
+}

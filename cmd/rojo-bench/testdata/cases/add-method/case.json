@@ -1,0 +1,5 @@
+{
+  "name": "add-method",
+  "difficulty": "easy",
+  "task": "Add a Reset method to Counter that sets the count back to zero."
+}

@@ -1,0 +1,5 @@
+{
+  "name": "add-struct-field",
+  "difficulty": "medium",
+  "task": "Add an Email field to the User struct. NewUser should take the email as a second parameter after the name. Describe should return the name, a space, then the email in angle brackets, for example: Ada <ada@example.com>. Update any existing callers and tests so everything still compiles and passes."
+}
