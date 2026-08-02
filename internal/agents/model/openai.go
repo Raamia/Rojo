@@ -130,7 +130,18 @@ func (c *OpenAIClient) Generate(ctx context.Context, req Request) (Response, err
 		return Response{}, fmt.Errorf("%w (finish reason %q)", ErrNoTextContent, choice.FinishReason)
 	}
 
-	return Response{Text: choice.Message.Content, Model: completion.Model}, nil
+	return Response{
+		Text:  choice.Message.Content,
+		Model: completion.Model,
+		// prompt/completion are OpenAI's names for the same two numbers
+		// Anthropic calls input/output. CompletionTokens includes reasoning
+		// tokens, which is what makes it the billable figure rather than a
+		// count of what came back as text.
+		Usage: Usage{
+			InputTokens:  completion.Usage.PromptTokens,
+			OutputTokens: completion.Usage.CompletionTokens,
+		},
+	}, nil
 }
 
 // describeOpenAIError turns an SDK error into one that says what went wrong and

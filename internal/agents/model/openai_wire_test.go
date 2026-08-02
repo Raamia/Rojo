@@ -349,3 +349,16 @@ func TestNewOpenAIClient_DefaultsTheModel(t *testing.T) {
 		t.Errorf("model = %q, want %q", got, DefaultOpenAIModel)
 	}
 }
+
+// OpenAI names the same two numbers prompt/completion; the client must map them
+// onto the provider-neutral fields so callers never learn who answered.
+func TestOpenAIWire_ParsesTokenUsage(t *testing.T) {
+	cs := newOpenAICapture(t)
+	resp, err := openAIClientAgainst(cs).Generate(context.Background(), Request{Prompt: "hi"})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if resp.Usage.InputTokens != 10 || resp.Usage.OutputTokens != 5 {
+		t.Errorf("Usage = %+v, want prompt 10 mapped to input and completion 5 to output", resp.Usage)
+	}
+}

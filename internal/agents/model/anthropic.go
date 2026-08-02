@@ -131,7 +131,19 @@ func (c *AnthropicClient) Generate(ctx context.Context, req Request) (Response, 
 			"the change is probably too large for one response", ErrTruncated, maxToks)
 	}
 
-	return Response{Text: text.String(), Model: string(msg.Model)}, nil
+	return Response{
+		Text:  text.String(),
+		Model: string(msg.Model),
+		// OutputTokens is the inclusive, authoritative billing total — it
+		// already contains any tokens spent on thinking, which adaptive
+		// thinking makes a real share of the cost here. Cache fields are
+		// deliberately not folded in: they price differently, and a single
+		// summed number that mixes rates is worse than no number.
+		Usage: Usage{
+			InputTokens:  msg.Usage.InputTokens,
+			OutputTokens: msg.Usage.OutputTokens,
+		},
+	}, nil
 }
 
 // describeAPIError turns an SDK error into one that says what went wrong and

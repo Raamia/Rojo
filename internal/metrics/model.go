@@ -22,6 +22,10 @@ type instrumentedModel struct {
 func (m *instrumentedModel) Generate(ctx context.Context, req model.Request) (model.Response, error) {
 	start := time.Now()
 	resp, err := m.inner.Generate(ctx, req)
-	m.registry.ModelCall(time.Since(start), err)
+	// Usage is recorded even on the error path: a call that failed after the
+	// provider had already generated tokens still cost money, and a cost figure
+	// that silently omits failures understates exactly the runs worth knowing
+	// about. A zero Usage — the provider did not say — adds nothing.
+	m.registry.ModelCall(time.Since(start), err, resp.Usage)
 	return resp, err
 }

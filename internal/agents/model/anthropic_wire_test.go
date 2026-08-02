@@ -276,3 +276,19 @@ func TestWire_NormalStopReasonIsNotAnError(t *testing.T) {
 		t.Errorf("end_turn should not be an error: %v", err)
 	}
 }
+
+// Token usage is what a cost figure is derived from, so it has to survive the
+// trip off the wire rather than being inferred later from string length.
+func TestWire_ParsesTokenUsage(t *testing.T) {
+	cs := newCaptureServer(t)
+	resp, err := clientAgainst(cs).Generate(context.Background(), Request{Prompt: "hi"})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if resp.Usage.InputTokens != 10 || resp.Usage.OutputTokens != 5 {
+		t.Errorf("Usage = %+v, want the stubbed 10 in / 5 out", resp.Usage)
+	}
+	if resp.Usage.Total() != 15 {
+		t.Errorf("Total() = %d, want 15", resp.Usage.Total())
+	}
+}

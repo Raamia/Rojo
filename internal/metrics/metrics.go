@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Raamia/Rojo/internal/agents/model"
 )
 
 // Registry is the process's single metrics store. All methods are safe for
@@ -30,6 +32,11 @@ type Registry struct {
 	modelCalls   atomic.Int64
 	modelErrors  atomic.Int64
 	modelLatency durationStat
+
+	// Tokens consumed, split because the two halves are priced differently and
+	// a single total cannot be converted back into money.
+	inputTokens  atomic.Int64
+	outputTokens atomic.Int64
 
 	jobDuration durationStat
 	queueWait   durationStat
@@ -117,7 +124,7 @@ func (r *Registry) RevisionRequested() {
 }
 
 // ModelCall records one round trip to the model.
-func (r *Registry) ModelCall(took time.Duration, err error) {
+func (r *Registry) ModelCall(took time.Duration, err error, usage model.Usage) {
 	if r == nil {
 		return
 	}
@@ -125,6 +132,14 @@ func (r *Registry) ModelCall(took time.Duration, err error) {
 	r.modelLatency.record(took)
 	if err != nil {
 		r.modelErrors.Add(1)
+	}
+	// Guarded against negatives so a provider reporting nonsense cannot drive
+	// the totals backwards; a benchmark's cost figure is derived from these.
+	if usage.InputTokens > 0 {
+		r.inputTokens.Add(usage.InputTokens)
+	}
+	if usage.OutputTokens > 0 {
+		r.outputTokens.Add(usage.OutputTokens)
 	}
 }
 
@@ -154,6 +169,11 @@ func (r *Registry) Snapshot() map[string]any {
 			"calls":   r.modelCalls.Load(),
 			"errors":  r.modelErrors.Load(),
 			"latency": r.modelLatency.snapshot(),
+			"tokens": map[string]any{
+				"input":  r.inputTokens.Load(),
+				"output": r.outputTokens.Load(),
+				"total":  r.inputTokens.Load() + r.outputTokens.Load(),
+			},
 		},
 		"revisions_requested": r.revisionsRequested.Load(),
 	}

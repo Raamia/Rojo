@@ -53,8 +53,8 @@ func TestOutcomesLandInTheirOwnCounters(t *testing.T) {
 
 func TestModelCallsAndErrors(t *testing.T) {
 	r := New()
-	r.ModelCall(100*time.Millisecond, nil)
-	r.ModelCall(300*time.Millisecond, errors.New("rate limited"))
+	r.ModelCall(100*time.Millisecond, nil, model.Usage{InputTokens: 10, OutputTokens: 5})
+	r.ModelCall(300*time.Millisecond, errors.New("rate limited"), model.Usage{InputTokens: 7, OutputTokens: 3})
 
 	m := section(t, r.Snapshot(), "model")
 	if m["calls"] != int64(2) || m["errors"] != int64(1) {
@@ -63,6 +63,35 @@ func TestModelCallsAndErrors(t *testing.T) {
 	lat := m["latency"].(map[string]any)
 	if lat["mean_ms"] != int64(200) || lat["max_ms"] != int64(300) {
 		t.Errorf("latency = %v", lat)
+	}
+	// A failed call still consumed tokens, so its usage counts: a cost figure
+	// that omits failures understates exactly the runs worth investigating.
+	tok := m["tokens"].(map[string]any)
+	if tok["input"] != int64(17) || tok["output"] != int64(8) || tok["total"] != int64(25) {
+		t.Errorf("tokens = %v, want input 17 / output 8 / total 25", tok)
+	}
+}
+
+// A provider that reports nothing must leave the totals alone rather than
+// recording zeros that would read as "this was free".
+func TestZeroAndNegativeUsageIsIgnored(t *testing.T) {
+	r := New()
+	r.ModelCall(time.Millisecond, nil, model.Usage{})
+	r.ModelCall(time.Millisecond, nil, model.Usage{InputTokens: -5, OutputTokens: -1})
+	r.ModelCall(time.Millisecond, nil, model.Usage{InputTokens: 4, OutputTokens: 2})
+
+	tok := section(t, r.Snapshot(), "model")["tokens"].(map[string]any)
+	if tok["input"] != int64(4) || tok["output"] != int64(2) {
+		t.Errorf("tokens = %v, want input 4 / output 2", tok)
+	}
+}
+
+func TestUsageTotal(t *testing.T) {
+	if got := (model.Usage{InputTokens: 3, OutputTokens: 4}).Total(); got != 7 {
+		t.Errorf("Total() = %d, want 7", got)
+	}
+	if got := (model.Usage{}).Total(); got != 0 {
+		t.Errorf("zero Total() = %d, want 0", got)
 	}
 }
 
@@ -85,7 +114,7 @@ func TestNilRegistryIsSafe(t *testing.T) {
 	var r *Registry
 	r.JobStarted()("completed", time.Second)
 	r.QueueWait(time.Second)
-	r.ModelCall(time.Second, nil)
+	r.ModelCall(time.Second, nil, model.Usage{})
 	r.RevisionRequested()
 	if got := r.Snapshot(); len(got) != 0 {
 		t.Errorf("nil snapshot = %v", got)
@@ -104,7 +133,7 @@ func TestConcurrentRecording(t *testing.T) {
 			for j := 0; j < 100; j++ {
 				done := r.JobStarted()
 				r.QueueWait(time.Millisecond)
-				r.ModelCall(time.Millisecond, nil)
+				r.ModelCall(time.Millisecond, nil, model.Usage{InputTokens: 1, OutputTokens: 1})
 				done("completed", time.Millisecond)
 			}
 		}()
